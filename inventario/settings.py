@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+from decouple import config
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,10 +22,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-r-v()1^_u2*lizgw7d1lqt6zkd$-3ga-eqxf4p=ptnz8vr+km='
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-r-v()1^_u2*lizgw7d1lqt6zkd$-3ga-eqxf4p=ptnz8vr+km=')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = ['*']
 
@@ -44,6 +46,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # CORS debe ir arriba
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # WhiteNoise para archivos estáticos
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -79,11 +82,11 @@ WSGI_APPLICATION = 'inventario.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'neondb',  # Nombre de la base de datos
-        'USER': 'neondb_owner',  # Usuario
-        'PASSWORD': 'npg_ULn9qa5mwfVc',  # Contraseña
-        'HOST': 'ep-still-thunder-a290hr9x-pooler.eu-central-1.aws.neon.tech',  # Host Neon
-        'PORT': '5432',  # Puerto por defecto
+        'NAME': config('DB_NAME', default='neondb'),
+        'USER': config('DB_USER', default='neondb_owner'),
+        'PASSWORD': config('DB_PASSWORD', default='npg_ULn9qa5mwfVc'),
+        'HOST': config('DB_HOST', default='ep-still-thunder-a290hr9x-pooler.eu-central-1.aws.neon.tech'),
+        'PORT': config('DB_PORT', default='5432'),
         'OPTIONS': {
             'sslmode': 'require',  # Conexión SSL obligatoria
         }
@@ -125,7 +128,14 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# CORS settings para API
+CORS_ALLOW_ALL_ORIGINS = True  # Solo para desarrollo, en producción especifica origins
+CORS_ALLOWED_ORIGINS = [
+    # Agrega aquí los dominios de tu frontend cuando sea necesario
+]
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
