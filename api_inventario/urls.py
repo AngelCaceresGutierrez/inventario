@@ -5,4 +5,7 @@ urlpatterns = [
     path('traer_usuarios/', views.traer_usuarios, name='traer_usuarios'),
     path('iniciar_sesion/', views.iniciar_sesion, name='iniciar_sesion'),
     path('listar_productos/', views.listar_productos, name='listar_productos'),
+
+    path('traer_categorias/', views.traer_categorias, name='traer_categorias'),
+    path('crear_producto/', views.crear_producto, name='crear_producto'),
 ]
