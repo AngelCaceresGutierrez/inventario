@@ -25,7 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-r-v()1^_u2*lizgw7d1lqt6zkd$-3ga-eqxf4p=ptnz8vr+km=')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=False, cast=bool)
+DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
@@ -46,7 +46,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # CORS debe ir arriba
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # WhiteNoise para archivos estáticos
+    #'whitenoise.middleware.WhiteNoiseMiddleware',  # WhiteNoise para archivos estáticos
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',

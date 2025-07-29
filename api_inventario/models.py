@@ -63,3 +63,13 @@ class Usuarios(models.Model):
     class Meta:
         managed = False
         db_table = 'usuarios'
+
+class Ventas(models.Model):
+    ven_id = models.AutoField(primary_key=True)
+    ven_fecha_registro = models.DateTimeField(blank=True, null=True)
+    ven_productos = models.CharField(max_length=100)
+    ven_monto_total = models.IntegerField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'ventas'

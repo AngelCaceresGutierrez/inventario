@@ -5,6 +5,8 @@ from .models import *
 from django.db.models import Q, F
 import random
 import string
+from datetime import datetime
+
 # Create your views here.
 
 @api_view(['GET'])
@@ -42,6 +44,80 @@ def traer_categorias(request):
     dueno = Dueno.objects.values('due_id', 'due_nombre')
     tipo = Tipo.objects.values('tip_id', 'tip_nombre')
     return Response({'ubicacion': ubicacion, 'dueno':dueno, 'tipo':tipo})
+
+
+@api_view(['GET'])
+def totales_vendidos_por_dia(request):
+    hoy = request.GET.get('fecha')
+    respuesta = []
+    
+    pro_mireya = 0
+    pro_ivan = 0
+    pro_paulina = 0
+
+    pro_ropa = 0
+    pro_paqueteria = 0
+    pro_utiles = 0
+
+    if not hoy:
+        hoy = datetime.now().date()
+    else: 
+        hoy = datetime.strptime(hoy.strip(), '%Y-%m-%d')
+
+    total_vendido = 0
+
+    ventas = Ventas.objects.filter(ven_fecha_registro__date = hoy).values()
+    arr_productos=[]
+    for ven in ventas:
+        total_vendido += ven['ven_monto_total']
+        arr_prod = ven['ven_productos'].split(';')
+
+        for arr in arr_prod:
+            ids = arr.split('_')
+            productos = Productos.objects.filter(pro_id=ids[0]).values()
+
+            for prod in productos:
+
+                arr_productos.append({
+                    'cantidad': ids[1], 
+                    'producto': prod['pro_nombre'],
+                    'precio': prod['pro_precio']
+                })
+
+                if prod['pro_tipo_id'] == 1:
+                    pro_ropa += prod['pro_precio'] * int(ids[1])
+                # Paqueteria
+                elif prod['pro_tipo_id'] == 2:
+                    pro_paqueteria += prod['pro_precio'] * int(ids[1])
+                # Utiles escolares
+                elif prod['pro_tipo_id'] == 3:
+                    pro_utiles += prod['pro_precio'] * int(ids[1])
+
+                # Mireya
+                if prod['pro_dueno_id'] == 1:
+                    pro_mireya += prod['pro_precio'] * int(ids[1])
+                # Ivan
+                elif prod['pro_dueno_id'] == 2:
+                    print('entre')
+                    pro_ivan += prod['pro_precio'] * int(ids[1])
+                # Paulina
+                elif prod['pro_dueno_id']== 3:
+                    pro_paulina += prod['pro_precio'] * int(ids[1])
+        
+
+    respuesta={
+        'fecha': hoy.strftime("%d-%m-%Y"),
+        'total_vendido': total_vendido,
+        'vendido_mireya': pro_mireya,
+        'vendido_ivan': pro_ivan,
+        'vendido_paulina': pro_paulina,
+        'vendido_ropa': pro_ropa,
+        'vendido_paqueteria': pro_paqueteria,
+        'vendido_utiles': pro_utiles,
+        'productos': list(arr_productos)
+    }
+
+    return Response({'respuesta': respuesta})
 
 
 @api_view(['POST'])
