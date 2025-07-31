@@ -84,26 +84,59 @@ def totales_vendidos_por_dia(request):
                     'precio': prod['pro_precio']
                 })
 
+                # Ropa
                 if prod['pro_tipo_id'] == 1:
-                    pro_ropa += prod['pro_precio'] * int(ids[1])
+                    cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
+                    if cantidad_oferta ==  int(ids[1]):
+                        precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
+                        pro_ropa += precio_oferta
+                    else:
+                        pro_ropa += prod['pro_precio'] * int(ids[1])
+
                 # Paqueteria
                 elif prod['pro_tipo_id'] == 2:
-                    pro_paqueteria += prod['pro_precio'] * int(ids[1])
+                    cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
+                    if cantidad_oferta ==  int(ids[1]):
+                        precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
+                        pro_paqueteria += precio_oferta
+                    else:
+                        pro_paqueteria += prod['pro_precio'] * int(ids[1])
+
                 # Utiles escolares
                 elif prod['pro_tipo_id'] == 3:
-                    pro_utiles += prod['pro_precio'] * int(ids[1])
+                    cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
+                    if cantidad_oferta ==  int(ids[1]):
+                        precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
+                        pro_utiles += precio_oferta
+                    else:
+                        pro_utiles += prod['pro_precio'] * int(ids[1])
 
                 # Mireya
                 if prod['pro_dueno_id'] == 1:
-                    pro_mireya += prod['pro_precio'] * int(ids[1])
+                    cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
+                    if cantidad_oferta ==  int(ids[1]):
+                        precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
+                        pro_mireya += precio_oferta
+                    else:
+                        pro_mireya += prod['pro_precio'] * int(ids[1])
+
                 # Ivan
                 elif prod['pro_dueno_id'] == 2:
-                    print('entre')
-                    pro_ivan += prod['pro_precio'] * int(ids[1])
+                    cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
+                    if cantidad_oferta ==  int(ids[1]):
+                        precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
+                        pro_ivan += precio_oferta
+                    else:
+                        pro_ivan += prod['pro_precio'] * int(ids[1])
+
                 # Paulina
                 elif prod['pro_dueno_id']== 3:
-                    pro_paulina += prod['pro_precio'] * int(ids[1])
-        
+                    cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
+                    if cantidad_oferta ==  int(ids[1]):
+                        precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
+                        pro_paulina += precio_oferta
+                    else:
+                        pro_paulina += prod['pro_precio'] * int(ids[1])        
 
     respuesta={
         'fecha': hoy.strftime("%d-%m-%Y"),
@@ -146,6 +179,8 @@ def crear_producto(request):
         codigo = verificar_codigo_unico()
         print(f"Código generado automáticamente: {codigo}")
         
+    precio_oferta = precio_oferta.replace(" ", "")
+    print(precio_oferta)
     try:
         producto = Productos.objects.create(
             pro_nombre=nombre,
