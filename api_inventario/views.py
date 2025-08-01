@@ -45,6 +45,12 @@ def traer_categorias(request):
     tipo = Tipo.objects.values('tip_id', 'tip_nombre')
     return Response({'ubicacion': ubicacion, 'dueno':dueno, 'tipo':tipo})
 
+@api_view(['GET'])
+def productos_por_tipo(request):
+    tipo = request.GET.get('tipo')
+    productos = Productos.objects.filter(pro_tipo_id = int(tipo)).values('pro_id', 'pro_nombre','pro_precio','pro_precio_oferta').order_by('pro_nombre')
+    return Response({'productos': list(productos)})
+
 
 @api_view(['GET'])
 def totales_vendidos_por_dia(request):
