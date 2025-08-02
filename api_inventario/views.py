@@ -51,6 +51,46 @@ def productos_por_tipo(request):
     productos = Productos.objects.filter(pro_tipo_id = int(tipo)).values('pro_id', 'pro_nombre','pro_precio','pro_precio_oferta').order_by('pro_nombre')
     return Response({'productos': list(productos)})
 
+@api_view(['POST'])
+def crear_venta(request):
+    arrProductos = request.data.get('arr')
+    print(arrProductos)
+    monto_total = 0
+    productos_vendidos = ''
+    # Recorrer el array de productos
+    for index, arr in enumerate(arrProductos):
+        # Sumar los subtotales
+        monto_total += arr['pro_subtotal']
+        
+        # Concatenar productos vendidos
+        producto_actual = str(arr['pro_id']) + '_' + str(arr['pro_cantidad'])
+        
+        # Si es el último elemento, no agregar punto y coma
+        if index == len(arrProductos) - 1:
+            productos_vendidos += producto_actual
+        else:
+            # Si no es el último, agregar punto y coma
+            productos_vendidos += producto_actual + ';'
+    
+    print(f"Monto total: {monto_total}")
+    print(f"Productos vendidos: {productos_vendidos}")
+
+    # Crear la venta en la base de datos
+    try:
+        Ventas.objects.create(
+            ven_monto_total=monto_total,
+            ven_productos=productos_vendidos,
+            ven_fecha_registro=datetime.now()
+        )
+        
+        return Response({
+            'message': 'Venta creada exitosamente',
+        }, status=200)
+        
+    except Exception as e:
+        return Response({'error': f'Error al crear venta: {str(e)}'}, status=500)
+
+
 
 @api_view(['GET'])
 def totales_vendidos_por_dia(request):
@@ -74,6 +114,7 @@ def totales_vendidos_por_dia(request):
 
     ventas = Ventas.objects.filter(ven_fecha_registro__date = hoy).values()
     arr_productos=[]
+    
     for ven in ventas:
         total_vendido += ven['ven_monto_total']
         arr_prod = ven['ven_productos'].split(';')
@@ -83,74 +124,58 @@ def totales_vendidos_por_dia(request):
             productos = Productos.objects.filter(pro_id=ids[0]).values()
 
             for prod in productos:
+                cantidad_vendida = int(ids[1])
+                precio_unitario = prod['pro_precio']
+                precio_oferta = prod['pro_precio_oferta']
+                
+                # Calcular el precio total con ofertas
+                def calcular_precio_con_oferta(cantidad, precio_normal, precio_oferta_str):
+                    if precio_oferta_str and 'x' in precio_oferta_str:
+                        try:
+                            partes = precio_oferta_str.split('x')
+                            cantidad_oferta = int(partes[0])
+                            precio_oferta_total = int(partes[1])
+                            
+                            # Calcular grupos de oferta y productos restantes
+                            grupos_oferta = cantidad // cantidad_oferta
+                            productos_restantes = cantidad % cantidad_oferta
+                            
+                            # Precio total = (grupos × precio_oferta) + (restantes × precio_normal)
+                            precio_total = (grupos_oferta * precio_oferta_total) + (productos_restantes * precio_normal)
+                            return precio_total
+                        except (ValueError, IndexError):
+                            # Si hay error en el formato, usar precio normal
+                            return precio_normal * cantidad
+                    else:
+                        # No tiene oferta, usar precio normal
+                        return precio_normal * cantidad
+
+                precio_calculado = calcular_precio_con_oferta(cantidad_vendida, precio_unitario, precio_oferta)
 
                 arr_productos.append({
-                    'cantidad': ids[1], 
+                    'cantidad': cantidad_vendida, 
                     'producto': prod['pro_nombre'],
-                    'precio': prod['pro_precio']
+                    'precio': precio_unitario,
+                    'precio_total': precio_calculado
                 })
 
-                # Ropa
-                if prod['pro_tipo_id'] == 1:
-                    if prod['pro_precio_oferta']: 
-                        cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
-                        if cantidad_oferta ==  int(ids[1]):
-                            precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
-                            pro_ropa += precio_oferta
-                    else:
-                        pro_ropa += prod['pro_precio'] * int(ids[1])
+                # Distribuir por tipo de producto
+                if prod['pro_tipo_id'] == 1:  # Ropa
+                    pro_ropa += precio_calculado
+                elif prod['pro_tipo_id'] == 2:  # Paquetería
+                    pro_paqueteria += precio_calculado
+                elif prod['pro_tipo_id'] == 3:  # Útiles escolares
+                    pro_utiles += precio_calculado
 
-                # Paqueteria
-                elif prod['pro_tipo_id'] == 2:
-                    if prod['pro_precio_oferta']: 
-                        cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
-                        if cantidad_oferta ==  int(ids[1]):
-                            precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
-                            pro_paqueteria += precio_oferta
-                    else:
-                        pro_paqueteria += prod['pro_precio'] * int(ids[1])
+                # Distribuir por dueño
+                if prod['pro_dueno_id'] == 1:  # Mireya
+                    pro_mireya += precio_calculado
+                elif prod['pro_dueno_id'] == 2:  # Ivan
+                    pro_ivan += precio_calculado
+                elif prod['pro_dueno_id'] == 3:  # Paulina
+                    pro_paulina += precio_calculado
 
-                # Utiles escolares
-                elif prod['pro_tipo_id'] == 3:
-                    if prod['pro_precio_oferta']: 
-                        cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
-                        if cantidad_oferta ==  int(ids[1]):
-                            precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
-                            pro_utiles += precio_oferta
-                    else:
-                        pro_utiles += prod['pro_precio'] * int(ids[1])
-
-                # Mireya
-                if prod['pro_dueno_id'] == 1:
-                    if prod['pro_precio_oferta']: 
-                        cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
-                        if cantidad_oferta ==  int(ids[1]):
-                            precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
-                            pro_mireya += precio_oferta
-                    else:
-                        pro_mireya += prod['pro_precio'] * int(ids[1])
-
-                # Ivan
-                elif prod['pro_dueno_id'] == 2:
-                    if prod['pro_precio_oferta']: 
-                        cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
-                        if cantidad_oferta ==  int(ids[1]):
-                            precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
-                            pro_ivan += precio_oferta
-                    else:
-                        pro_ivan += prod['pro_precio'] * int(ids[1])
-
-                # Paulina
-                elif prod['pro_dueno_id']== 3:
-                    if prod['pro_precio_oferta']: 
-                        cantidad_oferta= int(prod['pro_precio_oferta'].split('x')[0])
-                        if cantidad_oferta ==  int(ids[1]):
-                            precio_oferta= int(prod['pro_precio_oferta'].split('x')[1])
-                            pro_paulina += precio_oferta
-                    else:
-                        pro_paulina += prod['pro_precio'] * int(ids[1])        
-
-    respuesta={
+    respuesta = {
         'fecha': hoy.strftime("%d-%m-%Y"),
         'total_vendido': total_vendido,
         'vendido_mireya': pro_mireya,
@@ -163,7 +188,6 @@ def totales_vendidos_por_dia(request):
     }
 
     return Response({'respuesta': respuesta})
-
 
 @api_view(['POST'])
 def crear_producto(request):
