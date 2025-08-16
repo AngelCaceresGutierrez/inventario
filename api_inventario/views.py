@@ -11,12 +11,6 @@ import requests
 
 # Create your views here.
 
-@api_view(['GET'])
-def estoy_vivo(request):
-    productos = Productos.objects.filter(pro_tipo_id = 1).values('pro_id')
-    estoy_vivo_func()
-    return Response(list(productos))
-
 def estoy_vivo_func():
     time.sleep(60*8)
     try:
@@ -26,6 +20,14 @@ def estoy_vivo_func():
         print(f"Error en la request: {e}")
     
     return
+estoy_vivo_func()
+
+
+@api_view(['GET'])
+def estoy_vivo(request):
+    productos = Productos.objects.filter(pro_tipo_id = 1).values('pro_id')
+    estoy_vivo_func()
+    return Response(list(productos))
 
 
 
