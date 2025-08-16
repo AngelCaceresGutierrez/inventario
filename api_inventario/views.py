@@ -20,7 +20,7 @@ def estoy_vivo_func():
         print(f"Error en la request: {e}")
     
     return
-estoy_vivo_func()
+
 
 
 @api_view(['GET'])
