@@ -6,8 +6,28 @@ from django.db.models import Q, F
 import random
 import string
 from datetime import datetime
+import time
+import requests
 
 # Create your views here.
+
+@api_view(['GET'])
+def estoy_vivo(request):
+    productos = Productos.objects.filter(pro_tipo_id = 1).values('pro_id')
+    estoy_vivo_func()
+    return Response(list(productos))
+
+def estoy_vivo_func():
+    time.sleep(60*8)
+    try:
+        response = requests.get('https://inventario-mzod.onrender.com/api/estoy_vivo/')
+        print(f"Request completada. Status: {response.status_code}")
+    except Exception as e:
+        print(f"Error en la request: {e}")
+    
+    return
+
+
 
 @api_view(['GET'])
 def traer_usuarios(request):
@@ -244,3 +264,4 @@ def crear_producto(request):
     except Exception as e:
         return Response({'error': f'Error al crear producto: {str(e)}'}, status=500)
     
+
