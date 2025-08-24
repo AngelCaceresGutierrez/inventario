@@ -69,7 +69,15 @@ class Ventas(models.Model):
     ven_fecha_registro = models.DateTimeField(blank=True, null=True)
     ven_productos = models.CharField(max_length=100)
     ven_monto_total = models.IntegerField(blank=True, null=True)
+    ven_puesto = models.IntegerField(blank=True, null=True)
 
     class Meta:
         managed = False
         db_table = 'ventas'
+
+class Puestos(models.Model):
+    pue_id = models.AutoField(primary_key=True) 
+    pue_nombre = models.CharField(max_length=50)
+    class Meta:
+        managed = False
+        db_table = 'puestos'

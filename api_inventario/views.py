@@ -70,7 +70,11 @@ def traer_categorias(request):
 @api_view(['GET'])
 def productos_por_tipo(request):
     tipo = request.GET.get('tipo')
-    productos = Productos.objects.filter(pro_tipo_id = int(tipo)).values('pro_id', 'pro_nombre','pro_precio','pro_precio_oferta').order_by('pro_nombre')
+    productos = Productos.objects.values('pro_id', 'pro_nombre','pro_precio','pro_precio_oferta').order_by('pro_nombre')
+    
+    if tipo:
+        productos = productos.filter(pro_tipo_id = int(tipo))
+   
     return Response({'productos': list(productos)})
 
 @api_view(['POST'])
