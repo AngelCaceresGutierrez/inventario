@@ -70,7 +70,7 @@ def traer_categorias(request):
 @api_view(['GET'])
 def productos_por_tipo(request):
     tipo = request.GET.get('tipo')
-    productos = Productos.objects.values('pro_id', 'pro_nombre','pro_precio','pro_precio_oferta').order_by('pro_nombre')
+    productos = Productos.objects.values('pro_id', 'pro_nombre','pro_precio','pro_precio_oferta','pro_codigo').order_by('pro_nombre')
     
     if tipo:
         productos = productos.filter(pro_tipo_id = int(tipo))
@@ -80,7 +80,6 @@ def productos_por_tipo(request):
 @api_view(['POST'])
 def crear_venta(request):
     arrProductos = request.data.get('arr')
-    print(arrProductos)
     monto_total = 0
     productos_vendidos = ''
     # Recorrer el array de productos
@@ -97,16 +96,14 @@ def crear_venta(request):
         else:
             # Si no es el último, agregar punto y coma
             productos_vendidos += producto_actual + ';'
-    
-    print(f"Monto total: {monto_total}")
-    print(f"Productos vendidos: {productos_vendidos}")
 
     # Crear la venta en la base de datos
     try:
         Ventas.objects.create(
             ven_monto_total=monto_total,
             ven_productos=productos_vendidos,
-            ven_fecha_registro=datetime.now()
+            ven_fecha_registro=datetime.now(),
+            ven_puesto = arr['puesto']
         )
         
         return Response({
