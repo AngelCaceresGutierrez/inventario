@@ -8,6 +8,8 @@ import string
 from datetime import datetime
 import time
 import requests
+import json
+import traceback
 
 # Create your views here.
 
@@ -119,15 +121,16 @@ def editar_producto(request):
     id = request.data.get('id')
     producto = request.data.get('prod')
     try:
+        if isinstance(producto, str):
+            producto = json.loads(producto)
         Productos.objects.filter(pro_id=id).update(**producto)
-        
         return Response({
             'message': 'Producto editado exitosamente',
         }, status=200)
         
     except Exception as e:
+        traceback.print_exc()
         return Response({'error': f'Error al editar producto: {str(e)}'}, status=500)
-
 
 
 @api_view(['GET'])

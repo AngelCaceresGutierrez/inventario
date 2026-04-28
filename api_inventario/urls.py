@@ -11,6 +11,7 @@ urlpatterns = [
     path('traer_categorias/', views.traer_categorias, name='traer_categorias'),
     path('crear_producto/', views.crear_producto, name='crear_producto'),
     path('totales_vendidos_por_dia/', views.totales_vendidos_por_dia, name='totales_vendidos_por_dia'),
+    path('editar_producto/', views.editar_producto, name='editar_producto'),
 
     #Mantener vivo el servidor
     path('estoy_vivo/', views.estoy_vivo, name='estoy_vivo'),
