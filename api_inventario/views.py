@@ -55,7 +55,7 @@ def listar_productos(request):
     busqueda = request.GET.get('buscar')
     
     if busqueda:
-        productos = Productos.objects.filter(Q(pro_codigo=busqueda) | Q(pro_nombre__icontains=busqueda), pro_ubicacion=1).values('pro_id','pro_nombre', 'pro_precio', 'pro_precio_oferta', tipo = F('pro_tipo__tip_id'), ubicacion=F('pro_ubicacion__ubi_id'), codigo=F('pro_codigo'), cantidad=F('pro_cantidad'))
+        productos = Productos.objects.filter(Q(pro_codigo=busqueda) | Q(pro_nombre__icontains=busqueda), pro_ubicacion=1).values('pro_id','pro_nombre', 'pro_precio', 'pro_precio_oferta', tipo = F('pro_tipo__tip_id'), ubicacion=F('pro_ubicacion__ubi_id'), codigo=F('pro_codigo'), cantidad=F('pro_cantidad'),dueno=F('pro_dueno'))
 
     return Response({'productos': productos})
 
@@ -112,6 +112,21 @@ def crear_venta(request):
         
     except Exception as e:
         return Response({'error': f'Error al crear venta: {str(e)}'}, status=500)
+
+
+@api_view(['PATCH'])
+def editar_producto(request):
+    id = request.data.get('id')
+    producto = request.data.get('prod')
+    try:
+        Productos.objects.filter(pro_id=id).update(**producto)
+        
+        return Response({
+            'message': 'Producto editado exitosamente',
+        }, status=200)
+        
+    except Exception as e:
+        return Response({'error': f'Error al editar producto: {str(e)}'}, status=500)
 
 
 
