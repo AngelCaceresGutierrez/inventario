@@ -137,6 +137,18 @@ CORS_ALLOWED_ORIGINS = [
     # Agrega aquí los dominios de tu frontend cuando sea necesario
 ]
 
+# Gemini (lectura de notas por foto): la clave es un secreto SIN default —
+# si falta, leer_nota responde 503 GEMINI_NO_CONFIGURADA y el resto sigue funcionando.
+GEMINI_API_KEY = config('GEMINI_API_KEY', default=None)
+GEMINI_MODEL = config('GEMINI_MODEL', default='gemini-2.5-flash')
+
+# Cupo diario (RPD) del free tier del modelo activo, solo INFORMATIVO:
+# leer_nota nunca bloquea por este límite; la app muestra lo que queda.
+GEMINI_RPD_LIMITE = config('GEMINI_RPD_LIMITE', default=200, cast=int)
+
+# Límite de la foto en leer_nota (default Django 2,5 MB rechazaría fotos válidas)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

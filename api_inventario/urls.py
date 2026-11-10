@@ -16,4 +16,12 @@ urlpatterns = [
     #Mantener vivo el servidor
     path('estoy_vivo/', views.estoy_vivo, name='estoy_vivo'),
 
+    #Venta libre + lectura de nota por foto
+    path('crear_venta_libre/', views.crear_venta_libre, name='crear_venta_libre'),
+    path('guardar_correccion/', views.guardar_correccion, name='guardar_correccion'),
+    path('leer_nota/', views.leer_nota, name='leer_nota'),
+
+    #Contador informativo del free tier de Gemini
+    path('uso_gemini/', views.uso_gemini, name='uso_gemini'),
+
 ]

@@ -76,8 +76,43 @@ class Ventas(models.Model):
         db_table = 'ventas'
 
 class Puestos(models.Model):
-    pue_id = models.AutoField(primary_key=True) 
+    pue_id = models.AutoField(primary_key=True)
     pue_nombre = models.CharField(max_length=50)
     class Meta:
         managed = False
         db_table = 'puestos'
+
+class VentasLibres(models.Model):
+    vl_id = models.AutoField(primary_key=True)
+    vl_nombre = models.CharField(max_length=100)
+    vl_valor = models.IntegerField()
+    vl_fecha_registro = models.DateTimeField(blank=True, null=True)
+    vl_puesto = models.IntegerField()
+
+    class Meta:
+        managed = False
+        db_table = 'ventas_libres'
+
+
+class CorreccionesLectura(models.Model):
+    cl_id = models.AutoField(primary_key=True)
+    cl_texto_crudo = models.CharField(max_length=100)
+    cl_nombre_corregida = models.CharField(max_length=100)
+    cl_valor_corregido = models.IntegerField()
+    cl_fecha_registro = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'correcciones_lectura'
+        constraints = [
+            models.UniqueConstraint(fields=['cl_texto_crudo'], name='uq_correcciones_texto')
+        ]
+
+class UsoGemini(models.Model):
+    ug_fecha = models.DateField(primary_key=True)
+    ug_lecturas = models.IntegerField(default=0)
+    ug_tokens = models.IntegerField(default=0)
+
+    class Meta:
+        managed = False
+        db_table = 'uso_gemini'
