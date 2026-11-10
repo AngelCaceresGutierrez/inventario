@@ -548,7 +548,7 @@ def leer_nota(request):
             f'https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent',
             headers={'x-goog-api-key': settings.GEMINI_API_KEY},
             json=cuerpo,
-            timeout=75,
+            timeout=120,
         )
     except requests.exceptions.Timeout:
         return Response({'error': 'La lectura tardó demasiado; reintenta o ingresa los ítems manualmente', 'codigo': 'GEMINI_TIMEOUT'}, status=502)
