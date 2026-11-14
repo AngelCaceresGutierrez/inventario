@@ -540,6 +540,13 @@ def leer_nota(request):
             'temperature': 0,
             'responseMimeType': 'application/json',
             'responseSchema': SCHEMA_LECTURA_NOTA,
+            # Presupuesto completo: notas de feria con 50+ lineas
+            # (el pensamiento del modelo consume este mismo budget y
+            # truncaba el JSON a ~26 items).
+            'maxOutputTokens': 65536,
+            # OCR no necesita pensamiento: respuesta mas rapida y todo
+            # el budget disponible para los items.
+            'thinkingConfig': {'thinkingBudget': 0},
         },
     }
 
