@@ -165,7 +165,7 @@ def listar_productos(request):
 @api_view(['GET'])
 def traer_categorias(request):
     ubicacion = Ubicacion.objects.values('ubi_id', 'ubi_nombre')
-    dueno = Dueno.objects.values('due_id', 'due_nombre')
+    dueno = Dueno.objects.exclude(due_estado=False).values('due_id', 'due_nombre') # oculta duenos desactivados
     tipo = Tipo.objects.values('tip_id', 'tip_nombre')
     return Response({'ubicacion': ubicacion, 'dueno':dueno, 'tipo':tipo})
 

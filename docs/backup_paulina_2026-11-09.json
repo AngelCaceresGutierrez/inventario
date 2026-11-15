@@ -1,0 +1,227 @@
+{
+  "dueno_3": [
+    {
+      "due_id": 3,
+      "due_nombre": "Paulina",
+      "due_estado": true
+    }
+  ],
+  "productos_paulina": [
+    {
+      "pro_id": 3,
+      "pro_nombre": "Destacador",
+      "pro_codigo": "2",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 23,
+      "pro_precio_oferta": null,
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 137,
+      "pro_nombre": "Sacapunta doble",
+      "pro_codigo": "06997662",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1000,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 8,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 154,
+      "pro_nombre": "Colafria Import Grande",
+      "pro_codigo": "04595112",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 8,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 160,
+      "pro_nombre": "Lapiz mina diseño",
+      "pro_codigo": "37208320",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 250,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 9,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 2,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 176,
+      "pro_nombre": "Cepillo de pelo",
+      "pro_codigo": "54489599",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 9,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 2,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 191,
+      "pro_nombre": "Plantilla recortable",
+      "pro_codigo": "08292511",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 88,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 2,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 192,
+      "pro_nombre": "Plantilla chiporro",
+      "pro_codigo": "09749365",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 100,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 8,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 2,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 199,
+      "pro_nombre": "Goma factis",
+      "pro_codigo": "49875478",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 54,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 217,
+      "pro_nombre": "Sacapuntas 650",
+      "pro_codigo": "25213307",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 650,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 87,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 226,
+      "pro_nombre": "Plasticina corriente",
+      "pro_codigo": "45577672",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 36,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 242,
+      "pro_nombre": "Lapiz de cera ",
+      "pro_codigo": "31868742",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 2000,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 64944,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 247,
+      "pro_nombre": "Lapices colores chico",
+      "pro_codigo": "39794541",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 800,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 9798,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 248,
+      "pro_nombre": "Lapices scripto",
+      "pro_codigo": "11468772",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 3000,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 989898,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 250,
+      "pro_nombre": "Lapices colores Blanco",
+      "pro_codigo": "01617987",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 59598,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 251,
+      "pro_nombre": "Tijera escolar",
+      "pro_codigo": "66138827",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 88,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 266,
+      "pro_nombre": "Tabla periodica",
+      "pro_codigo": "69581449",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 800,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 979797,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 269,
+      "pro_nombre": "Mascarilla",
+      "pro_codigo": "19178529",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 76978,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 2,
+      "pro_estado": 1
+    },
+    {
+      "pro_id": 281,
+      "pro_nombre": "Porta mina",
+      "pro_codigo": "17111690",
+      "pro_ubicacion_id": 1,
+      "pro_precio": 1500,
+      "pro_dueno_id": 3,
+      "pro_cantidad": 79898,
+      "pro_precio_oferta": "",
+      "pro_tipo_id": 3,
+      "pro_estado": 1
+    }
+  ]
+}
