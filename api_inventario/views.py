@@ -5,9 +5,10 @@ from rest_framework.response import Response
 from .models import *
 from django.db.models import Q, F
 from django.db import IntegrityError
+import calendar
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import requests
 import json
@@ -615,5 +616,162 @@ def uso_gemini(request):
     except Exception:
         traceback.print_exc()
         return Response({'error': 'Error al consultar el uso de Gemini', 'codigo': 'ERROR_BD'}, status=500)
-    
+
+
+# ---------------------------------------------------------------------------
+# Resumen de gerencia (GET /api/resumen_gerencia/): serie de ventas por bucket
+# (mes/semana/dia) con desglose por dueño, puesto y tipo. Solo lectura, sin
+# filtro de puesto: la gerencia ve TODOS los puestos juntos.
+# ---------------------------------------------------------------------------
+
+# Mapeos por ID con el mismo criterio de totales_vendidos_por_dia, fijados por
+# contrato con el frontend. Si algún día cambian dueños/tipos en BD, actualizar
+# aquí (única fuente para este endpoint).
+RESUMEN_DUENOS_POR_ID = {1: 'mireya', 2: 'ivan', 3: 'paulina'}
+RESUMEN_TIPOS_POR_ID = {1: 'Ropa', 2: 'Paqueteria', 3: 'Utiles escolares'}
+# Ventas libres: dueño = su puesto (1=Mireya, 2=Ivan); otros puestos solo total.
+RESUMEN_DUENO_POR_PUESTO_LIBRE = {1: 'mireya', 2: 'ivan'}
+
+
+def _precio_con_oferta(cantidad, precio_normal, precio_oferta_str):
+    """Precio total de un producto vendido respetando ofertas '2x1000'.
+    ponytail: duplicada de la copia local de totales_vendidos_por_dia porque
+    ese endpoint no debe modificarse; si se extrae, esta se elimina."""
+    if precio_oferta_str and 'x' in precio_oferta_str:
+        try:
+            partes = precio_oferta_str.split('x')
+            cantidad_oferta = int(partes[0])
+            precio_oferta_total = int(partes[1])
+
+            grupos_oferta = cantidad // cantidad_oferta
+            productos_restantes = cantidad % cantidad_oferta
+
+            return (grupos_oferta * precio_oferta_total) + (productos_restantes * precio_normal)
+        except (ValueError, IndexError):
+            return precio_normal * cantidad
+    return precio_normal * cantidad
+
+
+def _clave_bucket(nivel, fecha_hora):
+    """Clave de serie para un timestamp: hora '0'..'23' en nivel dia,
+    fecha 'YYYY-MM-DD' en mes/semana."""
+    if nivel == 'dia':
+        return str(fecha_hora.hour)
+    return fecha_hora.date().isoformat()
+
+
+@api_view(['GET'])
+def resumen_gerencia(request):
+    """Ventas del periodo (ventas + ventas_libres) agrupadas en buckets por
+    dueño. Una query por tabla, productos en un solo batch (sin N+1)."""
+    nivel = request.GET.get('nivel', 'mes')
+    if nivel not in ('mes', 'semana', 'dia'):
+        return _respuesta_invalido('Nivel inválido: debe ser mes, semana o dia')
+
+    fecha_param = request.GET.get('fecha')
+    if fecha_param:
+        try:
+            fecha = datetime.strptime(fecha_param.strip(), '%Y-%m-%d').date()
+        except ValueError:
+            return _respuesta_invalido('Fecha inválida: formato esperado YYYY-MM-DD')
+    else:
+        # Criterio naive del proyecto (columnas TIMESTAMP sin tz): nunca timezone.now()
+        fecha = datetime.now().date()
+
+    # Rango [inicio, fin) naive + claves de bucket según nivel (todos los
+    # buckets del periodo van en la serie, sin ventas = ceros).
+    if nivel == 'dia':
+        inicio = datetime.combine(fecha, datetime.min.time())
+        fin = inicio + timedelta(days=1)
+        claves_bucket = [str(hora) for hora in range(24)]
+    elif nivel == 'semana':
+        lunes = fecha - timedelta(days=fecha.weekday())
+        inicio = datetime.combine(lunes, datetime.min.time())
+        fin = inicio + timedelta(days=7)
+        claves_bucket = [(inicio + timedelta(days=dia)).date().isoformat() for dia in range(7)]
+    else:  # mes
+        primer_dia = fecha.replace(day=1)
+        inicio = datetime.combine(primer_dia, datetime.min.time())
+        fin = inicio + timedelta(days=calendar.monthrange(fecha.year, fecha.month)[1])
+        claves_bucket = [(inicio + timedelta(days=dia)).date().isoformat() for dia in range((fin - inicio).days)]
+
+    desglose_bucket = {clave: {'mireya': 0, 'ivan': 0, 'paulina': 0} for clave in claves_bucket}
+    por_dueno = {'mireya': 0, 'ivan': 0, 'paulina': 0}
+    por_puesto = {}
+    por_tipo = {}
+
+    # --- Ventas viejas: dueño/tipo desde el serializado ven_productos ---
+    ventas = list(Ventas.objects.filter(
+        ven_fecha_registro__gte=inicio, ven_fecha_registro__lt=fin,
+    ).values('ven_fecha_registro', 'ven_productos', 'ven_puesto'))
+
+    ids_producto = {
+        int(trozo.split('_')[0])
+        for ven in ventas
+        for trozo in ven['ven_productos'].split(';')
+        if trozo.split('_')[0].isdigit()
+    }
+    mapa_productos = {p['pro_id']: p for p in Productos.objects.filter(
+        pro_id__in=ids_producto,
+    ).values('pro_id', 'pro_precio', 'pro_precio_oferta', 'pro_dueno_id', 'pro_tipo_id')}
+
+    for ven in ventas:
+        acumulador = desglose_bucket[_clave_bucket(nivel, ven['ven_fecha_registro'])]
+        for trozo in ven['ven_productos'].split(';'):
+            partes = trozo.split('_')
+            # Trozo malformado o producto borrado: sin dueño/tipo conocido,
+            # se ignora (mismo efecto que el patrón de la vista diaria)
+            if len(partes) != 2 or not partes[0].isdigit() or not partes[1].isdigit():
+                continue
+            producto = mapa_productos.get(int(partes[0]))
+            if producto is None:
+                continue
+            precio = _precio_con_oferta(int(partes[1]), producto['pro_precio'], producto['pro_precio_oferta'])
+
+            dueno = RESUMEN_DUENOS_POR_ID.get(producto['pro_dueno_id'])
+            if dueno:
+                acumulador[dueno] += precio
+                por_dueno[dueno] += precio
+            tipo = RESUMEN_TIPOS_POR_ID.get(producto['pro_tipo_id'])
+            if tipo:
+                por_tipo[tipo] = por_tipo.get(tipo, 0) + precio
+            if ven['ven_puesto'] is not None:
+                clave_puesto = str(ven['ven_puesto'])
+                por_puesto[clave_puesto] = por_puesto.get(clave_puesto, 0) + precio
+
+    # --- Ventas libres: 100% al dueño de su puesto ---
+    libres = list(VentasLibres.objects.filter(
+        vl_fecha_registro__gte=inicio, vl_fecha_registro__lt=fin,
+    ).values('vl_fecha_registro', 'vl_valor', 'vl_puesto'))
+
+    for lib in libres:
+        acumulador = desglose_bucket[_clave_bucket(nivel, lib['vl_fecha_registro'])]
+        dueno = RESUMEN_DUENO_POR_PUESTO_LIBRE.get(lib['vl_puesto'])
+        if dueno:
+            acumulador[dueno] += lib['vl_valor']
+            por_dueno[dueno] += lib['vl_valor']
+        clave_puesto = str(lib['vl_puesto'])
+        por_puesto[clave_puesto] = por_puesto.get(clave_puesto, 0) + lib['vl_valor']
+
+    serie = []
+    for clave in claves_bucket:
+        desglose = desglose_bucket[clave]
+        serie.append({
+            'bucket': clave,
+            'total': desglose['mireya'] + desglose['ivan'] + desglose['paulina'],
+            'mireya': desglose['mireya'],
+            'ivan': desglose['ivan'],
+            'paulina': desglose['paulina'],
+        })
+
+    return Response({
+        'nivel': nivel,
+        'fecha': fecha.isoformat(),
+        'serie': serie,
+        'total': sum(entrada['total'] for entrada in serie),
+        'por_dueno': por_dueno,
+        'por_puesto': {clave: por_puesto[clave] for clave in sorted(por_puesto, key=int)},
+        'por_tipo': {nombre: por_tipo[nombre] for nombre in RESUMEN_TIPOS_POR_ID.values() if nombre in por_tipo},
+        'ventas_count': len(ventas) + len(libres),
+    })
 

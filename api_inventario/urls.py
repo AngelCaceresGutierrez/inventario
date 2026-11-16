@@ -24,4 +24,7 @@ urlpatterns = [
     #Contador informativo del free tier de Gemini
     path('uso_gemini/', views.uso_gemini, name='uso_gemini'),
 
+    #Estadísticas de gerencia (serie por mes/semana/dia, todos los puestos)
+    path('resumen_gerencia/', views.resumen_gerencia, name='resumen_gerencia'),
+
 ]
