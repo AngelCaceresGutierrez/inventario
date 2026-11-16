@@ -21,6 +21,11 @@ urlpatterns = [
     path('guardar_correccion/', views.guardar_correccion, name='guardar_correccion'),
     path('leer_nota/', views.leer_nota, name='leer_nota'),
 
+    #Asociación de ventas libres a productos (aprendizaje)
+    path('pendientes/', views.listar_pendientes, name='listar_pendientes'),
+    path('asociar_pendiente/', views.asociar_pendiente, name='asociar_pendiente'),
+    path('asociaciones/', views.listar_asociaciones, name='listar_asociaciones'),
+
     #Contador informativo del free tier de Gemini
     path('uso_gemini/', views.uso_gemini, name='uso_gemini'),
 

@@ -116,3 +116,28 @@ class UsoGemini(models.Model):
     class Meta:
         managed = False
         db_table = 'uso_gemini'
+
+
+class AsociacionProducto(models.Model):
+    """Texto normalizado de venta libre → producto (aprendizaje permanente)."""
+    ap_id = models.AutoField(primary_key=True)
+    ap_texto = models.CharField(unique=True, max_length=100)
+    ap_producto = models.ForeignKey('Productos', models.DO_NOTHING, db_column='ap_producto_id')
+    ap_automatica = models.BooleanField(default=False)
+    ap_fecha = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'asociaciones_producto'
+
+
+class PendienteProducto(models.Model):
+    """Texto de venta libre sin match de producto, con contador de apariciones."""
+    pp_id = models.AutoField(primary_key=True)
+    pp_texto = models.CharField(unique=True, max_length=100)
+    pp_veces = models.IntegerField(default=1)
+    pp_fecha_ultimo = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'pendientes_producto'

@@ -6,8 +6,10 @@ from .models import *
 from django.db.models import Q, F
 from django.db import IntegrityError
 import calendar
+import difflib
 import random
 import string
+import unicodedata
 from datetime import datetime, timedelta
 import time
 import requests
@@ -427,7 +429,10 @@ def crear_producto(request):
 
 @api_view(['POST'])
 def crear_venta_libre(request):
-    """Venta libre: ítems {nombre, valor} sin vínculo al inventario, por puesto."""
+    """Venta libre: ítems {nombre, valor} sin vínculo al inventario, por puesto.
+    Cada texto libre intenta asociarse a un producto (aprendizaje permanente):
+    1) asociación ya guardada, 2) auto-match por similitud >= UMBRAL_MATCH
+    (guarda asociación automática), 3) sin match → fila en pendientes."""
     puesto = request.data.get('puesto')
     items = request.data.get('items')
 
@@ -448,18 +453,131 @@ def crear_venta_libre(request):
     try:
         # Fecha NAIVE igual que todo el proyecto (columnas TIMESTAMP sin tz,
         # datos históricos naive, hora local Chile UTC-3): NO usar timezone.now().
+        ahora = datetime.now()
+        auto = pendientes = 0
         for item in items:
             VentasLibres.objects.create(
                 vl_nombre=item['nombre'].strip(),
                 vl_valor=item['valor'],
-                vl_fecha_registro=datetime.now(),
+                vl_fecha_registro=ahora,
                 vl_puesto=puesto,
             )
+            # Asociación texto→producto: información aparte, el nombre libre no cambia.
+            normalizado = _normalizar_texto(item['nombre'])
+            if AsociacionProducto.objects.filter(ap_texto__iexact=normalizado).exists():
+                continue  # ya aprendido, nada más que hacer
+            match = _mejor_match_producto(item['nombre'])
+            if match is not None:
+                AsociacionProducto.objects.update_or_create(
+                    ap_texto=normalizado,
+                    defaults={'ap_producto_id': match, 'ap_automatica': True, 'ap_fecha': ahora},
+                )
+                PendienteProducto.objects.filter(pp_texto__iexact=normalizado).delete()
+                auto += 1
+            else:
+                fila, creado = PendienteProducto.objects.get_or_create(
+                    pp_texto=normalizado, defaults={'pp_veces': 1, 'pp_fecha_ultimo': ahora},
+                )
+                if not creado:
+                    PendienteProducto.objects.filter(pp_id=fila.pp_id).update(
+                        pp_veces=F('pp_veces') + 1, pp_fecha_ultimo=ahora,
+                    )
+                pendientes += 1
     except Exception:
         traceback.print_exc()
         return Response({'error': 'Error al crear venta libre', 'codigo': 'ERROR_BD'}, status=500)
 
-    return Response({'message': 'Ventas libres creadas', 'ventas_creadas': len(items)}, status=200)
+    return Response({
+        'message': 'Ventas libres creadas',
+        'ventas_creadas': len(items),
+        'asociaciones': {'auto': auto, 'pendientes': pendientes},
+    }, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Asociación de ventas libres a productos (aprendizaje texto→producto)
+# ---------------------------------------------------------------------------
+
+UMBRAL_MATCH = 0.9
+
+
+def _normalizar_texto(s):
+    """minúsculas, sin acentos (NFD), espacios colapsados y strip.
+    El resultado es la clave canónica de asociaciones y pendientes."""
+    s = unicodedata.normalize('NFD', s.lower())
+    s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
+    return ' '.join(s.split())
+
+
+def _mejor_match_producto(nombre):
+    """Producto cuyo nombre normalizado es casi idéntico al texto (>= UMBRAL_MATCH),
+    o None. Empate en el máximo o nada sobre el umbral → None (ambigüedad no adivina)."""
+    objetivo = _normalizar_texto(nombre)
+    mejor_id, mejor_score, empate = None, 0.0, False
+    for pro_id, pro_nombre in Productos.objects.values_list('pro_id', 'pro_nombre'):
+        score = difflib.SequenceMatcher(None, objetivo, _normalizar_texto(pro_nombre or '')).ratio()
+        if score >= UMBRAL_MATCH:
+            if score > mejor_score:
+                mejor_id, mejor_score, empate = pro_id, score, False
+            elif score == mejor_score and pro_id != mejor_id:
+                empate = True
+    return None if empate else mejor_id
+
+
+@api_view(['GET'])
+def listar_pendientes(request):
+    """Textos de venta libre aún sin producto, más recientes primero."""
+    filas = PendienteProducto.objects.order_by('-pp_fecha_ultimo').values('pp_texto', 'pp_veces', 'pp_fecha_ultimo')
+    pendientes = [{
+        'texto': f['pp_texto'],
+        'veces': f['pp_veces'],
+        'ultima': f['pp_fecha_ultimo'].strftime('%Y-%m-%d %H:%M'),
+    } for f in filas]
+    return Response({'pendientes': pendientes, 'total': len(pendientes)})
+
+
+@api_view(['POST'])
+def asociar_pendiente(request):
+    """Asociación manual texto→producto: guarda el aprendizaje y borra el pendiente."""
+    texto = request.data.get('texto')
+    producto_id = request.data.get('producto_id')
+
+    if not _texto_valido(texto):
+        return _respuesta_invalido('Texto requerido: no vacío y máximo 100 caracteres')
+    producto = Productos.objects.filter(pro_id=producto_id).first()
+    if producto is None:
+        return Response({'error': 'Producto no encontrado', 'codigo': 'PRODUCTO_INVALIDO'}, status=400)
+
+    normalizado = _normalizar_texto(texto)
+    try:
+        # Upsert idempotente (mismo criterio que guardar_correccion): re-asociar
+        # un texto ya aprendido actualiza el producto, no falla por UNIQUE.
+        AsociacionProducto.objects.update_or_create(
+            ap_texto=normalizado,
+            defaults={'ap_producto_id': producto.pro_id, 'ap_automatica': False, 'ap_fecha': datetime.now()},
+        )
+        PendienteProducto.objects.filter(pp_texto__iexact=normalizado).delete()
+    except Exception:
+        traceback.print_exc()
+        return Response({'error': 'Error al guardar asociación', 'codigo': 'ERROR_BD'}, status=500)
+
+    return Response({'message': 'Asociacion guardada', 'texto': normalizado, 'producto': producto.pro_nombre}, status=200)
+
+
+@api_view(['GET'])
+def listar_asociaciones(request):
+    """Auditoría del aprendizaje texto→producto, más recientes primero."""
+    filas = AsociacionProducto.objects.order_by('-ap_fecha').values(
+        'ap_texto', 'ap_producto_id', 'ap_producto__pro_nombre', 'ap_automatica', 'ap_fecha',
+    )
+    asociaciones = [{
+        'texto': f['ap_texto'],
+        'producto_id': f['ap_producto_id'],
+        'producto_nombre': f['ap_producto__pro_nombre'],
+        'automatica': f['ap_automatica'],
+        'fecha': f['ap_fecha'].strftime('%Y-%m-%d %H:%M'),
+    } for f in filas]
+    return Response({'asociaciones': asociaciones, 'total': len(asociaciones)})
 
 
 @api_view(['POST'])
