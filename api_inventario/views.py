@@ -331,15 +331,21 @@ def totales_vendidos_por_dia(request):
                 elif prod['pro_dueno_id'] == 3:  # Paulina
                     pro_paulina += precio_calculado
 
-    # Ventas libres del día (ítems sin vínculo al inventario): suman al total
-    # y se listan en productos[] con el mismo formato que las ventas normales.
+    # Ventas libres del día (ítems sin vínculo al inventario): suman al total,
+    # se listan en productos[] y se atribuyen al dueño de su puesto
+    # (1 = Mireya, 2 = Ivan) — no son una categoría aparte.
     libres = VentasLibres.objects.filter(vl_fecha_registro__date = hoy)
     if puesto_val is not None:
         libres = libres.filter(vl_puesto = puesto_val)
-    libres = list(libres.values('vl_nombre', 'vl_valor'))
+    libres = list(libres.values('vl_nombre', 'vl_valor', 'vl_puesto'))
 
-    monto_libres = sum(l['vl_valor'] for l in libres)
-    total_vendido += monto_libres
+    total_vendido += sum(l['vl_valor'] for l in libres)
+
+    for lib in libres:
+        if lib['vl_puesto'] == 1:  # Mireya
+            pro_mireya += lib['vl_valor']
+        elif lib['vl_puesto'] == 2:  # Ivan
+            pro_ivan += lib['vl_valor']
 
     for lib in libres:
         arr_productos.append({
@@ -355,7 +361,6 @@ def totales_vendidos_por_dia(request):
         'vendido_mireya': pro_mireya,
         'vendido_ivan': pro_ivan,
         'vendido_paulina': pro_paulina,
-        'vendido_libres': monto_libres,
         'vendido_ropa': pro_ropa,
         'vendido_paqueteria': pro_paqueteria,
         'vendido_utiles': pro_utiles,
