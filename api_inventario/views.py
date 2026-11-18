@@ -4,7 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import *
 from django.db.models import Q, F
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 import calendar
 import difflib
 import random
@@ -32,6 +32,7 @@ def _detectar_formato_imagen(cabecera):
         return 'image/webp'
     return None
 TAMANO_MAXIMO_IMAGEN = 5 * 1024 * 1024
+VALOR_MAXIMO_INT4 = 2147483647  # Tope de las columnas INTEGER de Postgres
 
 PROMPT_LECTURA_NOTA = (
     "Transcribe esta nota manuscrita de ventas de feria. Cada línea tiene el formato "
@@ -449,40 +450,44 @@ def crear_venta_libre(request):
             return _respuesta_invalido(f'Item inválido [{i}]: nombre requerido (texto, máximo 100 caracteres)')
         if not _entero_no_negativo(valor):
             return _respuesta_invalido(f'Item inválido [{i}]: valor requerido (entero >= 0)')
+        if valor > VALOR_MAXIMO_INT4:
+            return _respuesta_invalido(f'Item inválido [{i}]: valor fuera de rango (máximo {VALOR_MAXIMO_INT4})')
 
     try:
         # Fecha NAIVE igual que todo el proyecto (columnas TIMESTAMP sin tz,
         # datos históricos naive, hora local Chile UTC-3): NO usar timezone.now().
         ahora = datetime.now()
         auto = pendientes = 0
-        for item in items:
-            VentasLibres.objects.create(
-                vl_nombre=item['nombre'].strip(),
-                vl_valor=item['valor'],
-                vl_fecha_registro=ahora,
-                vl_puesto=puesto,
-            )
-            # Asociación texto→producto: información aparte, el nombre libre no cambia.
-            normalizado = _normalizar_texto(item['nombre'])
-            if AsociacionProducto.objects.filter(ap_texto__iexact=normalizado).exists():
-                continue  # ya aprendido, nada más que hacer
-            match = _mejor_match_producto(item['nombre'])
-            if match is not None:
-                AsociacionProducto.objects.update_or_create(
-                    ap_texto=normalizado,
-                    defaults={'ap_producto_id': match, 'ap_automatica': True, 'ap_fecha': ahora},
+        # Todo o nada: una venta parcial se duplicaría cuando el cliente reintente.
+        with transaction.atomic():
+            for item in items:
+                VentasLibres.objects.create(
+                    vl_nombre=item['nombre'].strip(),
+                    vl_valor=item['valor'],
+                    vl_fecha_registro=ahora,
+                    vl_puesto=puesto,
                 )
-                PendienteProducto.objects.filter(pp_texto__iexact=normalizado).delete()
-                auto += 1
-            else:
-                fila, creado = PendienteProducto.objects.get_or_create(
-                    pp_texto=normalizado, defaults={'pp_veces': 1, 'pp_fecha_ultimo': ahora},
-                )
-                if not creado:
-                    PendienteProducto.objects.filter(pp_id=fila.pp_id).update(
-                        pp_veces=F('pp_veces') + 1, pp_fecha_ultimo=ahora,
+                # Asociación texto→producto: información aparte, el nombre libre no cambia.
+                normalizado = _normalizar_texto(item['nombre'])
+                if AsociacionProducto.objects.filter(ap_texto__iexact=normalizado).exists():
+                    continue  # ya aprendido, nada más que hacer
+                match = _mejor_match_producto(item['nombre'])
+                if match is not None:
+                    AsociacionProducto.objects.update_or_create(
+                        ap_texto=normalizado,
+                        defaults={'ap_producto_id': match, 'ap_automatica': True, 'ap_fecha': ahora},
                     )
-                pendientes += 1
+                    PendienteProducto.objects.filter(pp_texto__iexact=normalizado).delete()
+                    auto += 1
+                else:
+                    fila, creado = PendienteProducto.objects.get_or_create(
+                        pp_texto=normalizado, defaults={'pp_veces': 1, 'pp_fecha_ultimo': ahora},
+                    )
+                    if not creado:
+                        PendienteProducto.objects.filter(pp_id=fila.pp_id).update(
+                            pp_veces=F('pp_veces') + 1, pp_fecha_ultimo=ahora,
+                        )
+                    pendientes += 1
     except Exception:
         traceback.print_exc()
         return Response({'error': 'Error al crear venta libre', 'codigo': 'ERROR_BD'}, status=500)
@@ -865,14 +870,24 @@ def resumen_gerencia(request):
     # --- Ventas libres: 100% al dueño de su puesto ---
     libres = list(VentasLibres.objects.filter(
         vl_fecha_registro__gte=inicio, vl_fecha_registro__lt=fin,
-    ).values('vl_fecha_registro', 'vl_valor', 'vl_puesto'))
+    ).values('vl_fecha_registro', 'vl_nombre', 'vl_valor', 'vl_puesto'))
 
-    for lib in libres:
+    # Tipo resuelto al consultar: asociar un pendiente incluye sus ventas pasadas.
+    nombres_normalizados = [_normalizar_texto(lib['vl_nombre']) for lib in libres]
+    tipo_por_texto = dict(AsociacionProducto.objects.filter(
+        ap_texto__in=set(nombres_normalizados),
+    ).values_list('ap_texto', 'ap_producto__pro_tipo_id'))
+
+    for lib, texto in zip(libres, nombres_normalizados):
         acumulador = desglose_bucket[_clave_bucket(nivel, lib['vl_fecha_registro'])]
         dueno = RESUMEN_DUENO_POR_PUESTO_LIBRE.get(lib['vl_puesto'])
         if dueno:
             acumulador[dueno] += lib['vl_valor']
             por_dueno[dueno] += lib['vl_valor']
+        # El monto sale de la venta (vl_valor), nunca del precio del producto.
+        tipo = RESUMEN_TIPOS_POR_ID.get(tipo_por_texto.get(texto))
+        if tipo:
+            por_tipo[tipo] = por_tipo.get(tipo, 0) + lib['vl_valor']
         clave_puesto = str(lib['vl_puesto'])
         por_puesto[clave_puesto] = por_puesto.get(clave_puesto, 0) + lib['vl_valor']
 
