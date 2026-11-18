@@ -757,8 +757,22 @@ def uso_gemini(request):
 # aquí (única fuente para este endpoint).
 RESUMEN_DUENOS_POR_ID = {1: 'mireya', 2: 'ivan', 3: 'paulina'}
 RESUMEN_TIPOS_POR_ID = {1: 'Ropa', 2: 'Paqueteria', 3: 'Utiles escolares'}
-# Ventas libres: dueño = su puesto (1=Mireya, 2=Ivan); otros puestos solo total.
+# Ventas libres: dueño = su puesto (1=Mireya, 2=Ivan); otros puestos solo por_puesto.
 RESUMEN_DUENO_POR_PUESTO_LIBRE = {1: 'mireya', 2: 'ivan'}
+RESUMEN_SIN_TIPO = 'Sin tipo'
+
+
+def _tipo_venta_libre(texto, tipo_id_asociado, tipos_id_por_nombre):
+    """Tipo de una venta libre: primero su asociación; si no da un tipo conocido,
+    el producto de igual nombre normalizado. tipos_id_por_nombre solo trae tipos
+    conocidos; ninguno, o dos distintos (ambiguo) → sin tipo."""
+    tipo = RESUMEN_TIPOS_POR_ID.get(tipo_id_asociado.get(texto))
+    if tipo:
+        return tipo
+    candidatos = tipos_id_por_nombre.get(texto, set())
+    if len(candidatos) != 1:
+        return RESUMEN_SIN_TIPO
+    return RESUMEN_TIPOS_POR_ID[next(iter(candidatos))]
 
 
 def _precio_con_oferta(cantidad, precio_normal, precio_oferta_str):
@@ -833,15 +847,10 @@ def resumen_gerencia(request):
         ven_fecha_registro__gte=inicio, ven_fecha_registro__lt=fin,
     ).values('ven_fecha_registro', 'ven_productos', 'ven_puesto'))
 
-    ids_producto = {
-        int(trozo.split('_')[0])
-        for ven in ventas
-        for trozo in ven['ven_productos'].split(';')
-        if trozo.split('_')[0].isdigit()
-    }
-    mapa_productos = {p['pro_id']: p for p in Productos.objects.filter(
-        pro_id__in=ids_producto,
-    ).values('pro_id', 'pro_precio', 'pro_precio_oferta', 'pro_dueno_id', 'pro_tipo_id')}
+    # Catálogo completo en una query: lo usan las ventas viejas (por id) y las libres (por nombre).
+    mapa_productos = {p['pro_id']: p for p in Productos.objects.values(
+        'pro_id', 'pro_nombre', 'pro_precio', 'pro_precio_oferta', 'pro_dueno_id', 'pro_tipo_id',
+    )}
 
     for ven in ventas:
         acumulador = desglose_bucket[_clave_bucket(nivel, ven['ven_fecha_registro'])]
@@ -860,8 +869,8 @@ def resumen_gerencia(request):
             if dueno:
                 acumulador[dueno] += precio
                 por_dueno[dueno] += precio
-            tipo = RESUMEN_TIPOS_POR_ID.get(producto['pro_tipo_id'])
-            if tipo:
+                # Dentro de `if dueno`: por_tipo debe sumar exactamente el total.
+                tipo = RESUMEN_TIPOS_POR_ID.get(producto['pro_tipo_id'], RESUMEN_SIN_TIPO)
                 por_tipo[tipo] = por_tipo.get(tipo, 0) + precio
             if ven['ven_puesto'] is not None:
                 clave_puesto = str(ven['ven_puesto'])
@@ -874,9 +883,17 @@ def resumen_gerencia(request):
 
     # Tipo resuelto al consultar: asociar un pendiente incluye sus ventas pasadas.
     nombres_normalizados = [_normalizar_texto(lib['vl_nombre']) for lib in libres]
-    tipo_por_texto = dict(AsociacionProducto.objects.filter(
+    tipo_id_asociado = dict(AsociacionProducto.objects.filter(
         ap_texto__in=set(nombres_normalizados),
     ).values_list('ap_texto', 'ap_producto__pro_tipo_id'))
+
+    # ponytail: normaliza el catálogo en Python en cada request (los acentos no se
+    # resuelven en SQL); si crece mucho, guardar el nombre normalizado en una columna.
+    tipos_id_por_nombre = {}
+    for producto in mapa_productos.values():
+        # Solo tipos conocidos: un duplicado sin tipo no debe anular al que sí lo tiene.
+        if producto['pro_nombre'] and producto['pro_tipo_id'] in RESUMEN_TIPOS_POR_ID:
+            tipos_id_por_nombre.setdefault(_normalizar_texto(producto['pro_nombre']), set()).add(producto['pro_tipo_id'])
 
     for lib, texto in zip(libres, nombres_normalizados):
         acumulador = desglose_bucket[_clave_bucket(nivel, lib['vl_fecha_registro'])]
@@ -884,9 +901,8 @@ def resumen_gerencia(request):
         if dueno:
             acumulador[dueno] += lib['vl_valor']
             por_dueno[dueno] += lib['vl_valor']
-        # El monto sale de la venta (vl_valor), nunca del precio del producto.
-        tipo = RESUMEN_TIPOS_POR_ID.get(tipo_por_texto.get(texto))
-        if tipo:
+            # El monto sale de la venta (vl_valor), nunca del precio del producto.
+            tipo = _tipo_venta_libre(texto, tipo_id_asociado, tipos_id_por_nombre)
             por_tipo[tipo] = por_tipo.get(tipo, 0) + lib['vl_valor']
         clave_puesto = str(lib['vl_puesto'])
         por_puesto[clave_puesto] = por_puesto.get(clave_puesto, 0) + lib['vl_valor']
@@ -909,7 +925,11 @@ def resumen_gerencia(request):
         'total': sum(entrada['total'] for entrada in serie),
         'por_dueno': por_dueno,
         'por_puesto': {clave: por_puesto[clave] for clave in sorted(por_puesto, key=int)},
-        'por_tipo': {nombre: por_tipo[nombre] for nombre in RESUMEN_TIPOS_POR_ID.values() if nombre in por_tipo},
+        'por_tipo': {
+            nombre: por_tipo[nombre]
+            for nombre in (*RESUMEN_TIPOS_POR_ID.values(), RESUMEN_SIN_TIPO)
+            if por_tipo.get(nombre)
+        },
         'ventas_count': len(ventas) + len(libres),
     })
 
