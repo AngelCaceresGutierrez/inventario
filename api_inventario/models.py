@@ -88,6 +88,7 @@ class VentasLibres(models.Model):
     vl_valor = models.IntegerField()
     vl_fecha_registro = models.DateTimeField(blank=True, null=True)
     vl_puesto = models.IntegerField()
+    vl_metodo_pago = models.CharField(max_length=20, default='efectivo')
 
     class Meta:
         managed = False

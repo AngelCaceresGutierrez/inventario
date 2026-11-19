@@ -33,6 +33,8 @@ def _detectar_formato_imagen(cabecera):
     return None
 TAMANO_MAXIMO_IMAGEN = 5 * 1024 * 1024
 VALOR_MAXIMO_INT4 = 2147483647  # Tope de las columnas INTEGER de Postgres
+METODOS_PAGO = ('efectivo', 'tarjeta', 'transferencia')  # Mismos valores que el CHECK de ventas_libres
+METODO_PAGO_POR_DEFECTO = 'efectivo'
 
 PROMPT_LECTURA_NOTA = (
     "Transcribe esta nota manuscrita de ventas de feria. Cada línea tiene el formato "
@@ -441,6 +443,10 @@ def crear_venta_libre(request):
         return _respuesta_invalido('Puesto requerido: entero mayor a 0')
     if not isinstance(items, list) or not (1 <= len(items) <= 50):
         return _respuesta_invalido('Items requeridos: lista de 1 a 50 ítems')
+    # Ausente = app antigua instalada; un null explícito sí es inválido.
+    metodo_pago = request.data.get('metodo_pago', METODO_PAGO_POR_DEFECTO)
+    if metodo_pago not in METODOS_PAGO:
+        return _respuesta_invalido('Método de pago inválido: debe ser efectivo, tarjeta o transferencia')
 
     # Whitelist: por ítem solo se leen nombre y valor; todo lo demás se ignora.
     for i, item in enumerate(items):
@@ -466,6 +472,7 @@ def crear_venta_libre(request):
                     vl_valor=item['valor'],
                     vl_fecha_registro=ahora,
                     vl_puesto=puesto,
+                    vl_metodo_pago=metodo_pago,
                 )
                 # Asociación texto→producto: información aparte, el nombre libre no cambia.
                 normalizado = _normalizar_texto(item['nombre'])
@@ -841,6 +848,7 @@ def resumen_gerencia(request):
     por_dueno = {'mireya': 0, 'ivan': 0, 'paulina': 0}
     por_puesto = {}
     por_tipo = {}
+    por_metodo_pago = {metodo: 0 for metodo in METODOS_PAGO}
 
     # --- Ventas viejas: dueño/tipo desde el serializado ven_productos ---
     ventas = list(Ventas.objects.filter(
@@ -869,9 +877,11 @@ def resumen_gerencia(request):
             if dueno:
                 acumulador[dueno] += precio
                 por_dueno[dueno] += precio
-                # Dentro de `if dueno`: por_tipo debe sumar exactamente el total.
+                # Dentro de `if dueno`: por_tipo y por_metodo_pago deben sumar exactamente el total.
                 tipo = RESUMEN_TIPOS_POR_ID.get(producto['pro_tipo_id'], RESUMEN_SIN_TIPO)
                 por_tipo[tipo] = por_tipo.get(tipo, 0) + precio
+                # La tabla ventas no registra método de pago: cuenta como el valor por defecto.
+                por_metodo_pago[METODO_PAGO_POR_DEFECTO] += precio
             if ven['ven_puesto'] is not None:
                 clave_puesto = str(ven['ven_puesto'])
                 por_puesto[clave_puesto] = por_puesto.get(clave_puesto, 0) + precio
@@ -879,7 +889,7 @@ def resumen_gerencia(request):
     # --- Ventas libres: 100% al dueño de su puesto ---
     libres = list(VentasLibres.objects.filter(
         vl_fecha_registro__gte=inicio, vl_fecha_registro__lt=fin,
-    ).values('vl_fecha_registro', 'vl_nombre', 'vl_valor', 'vl_puesto'))
+    ).values('vl_fecha_registro', 'vl_nombre', 'vl_valor', 'vl_puesto', 'vl_metodo_pago'))
 
     # Tipo resuelto al consultar: asociar un pendiente incluye sus ventas pasadas.
     nombres_normalizados = [_normalizar_texto(lib['vl_nombre']) for lib in libres]
@@ -904,6 +914,7 @@ def resumen_gerencia(request):
             # El monto sale de la venta (vl_valor), nunca del precio del producto.
             tipo = _tipo_venta_libre(texto, tipo_id_asociado, tipos_id_por_nombre)
             por_tipo[tipo] = por_tipo.get(tipo, 0) + lib['vl_valor']
+            por_metodo_pago[lib['vl_metodo_pago']] += lib['vl_valor']
         clave_puesto = str(lib['vl_puesto'])
         por_puesto[clave_puesto] = por_puesto.get(clave_puesto, 0) + lib['vl_valor']
 
@@ -930,6 +941,7 @@ def resumen_gerencia(request):
             for nombre in (*RESUMEN_TIPOS_POR_ID.values(), RESUMEN_SIN_TIPO)
             if por_tipo.get(nombre)
         },
+        'por_metodo_pago': por_metodo_pago,
         'ventas_count': len(ventas) + len(libres),
     })
 

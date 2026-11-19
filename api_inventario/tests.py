@@ -273,6 +273,133 @@ class ResumenGerenciaPorTipoTests(TestCase):
         self.assertEqual(len(con_treinta_libres), len(con_una_libre))
 
 
+class MetodoPagoCrearVentaLibreTests(TestCase):
+    ITEMS = [{'nombre': 'gasa', 'valor': 500}, {'nombre': 'curita', 'valor': 1000}]
+
+    def _crear(self, **extra):
+        return self.client.post(
+            reverse('crear_venta_libre'), {'puesto': 1, 'items': self.ITEMS, **extra}, content_type='application/json',
+        )
+
+    def _metodos_guardados(self):
+        return list(VentasLibres.objects.values_list('vl_metodo_pago', flat=True))
+
+    def test_cada_metodo_se_guarda_en_todas_las_filas(self):
+        for metodo in ('efectivo', 'tarjeta', 'transferencia'):
+            with self.subTest(metodo=metodo):
+                VentasLibres.objects.all().delete()
+
+                respuesta = self._crear(metodo_pago=metodo)
+
+                self.assertEqual(respuesta.status_code, 200)
+                self.assertEqual(self._metodos_guardados(), [metodo, metodo])
+
+    def test_sin_metodo_de_pago_guarda_efectivo(self):
+        self.assertEqual(self._crear().status_code, 200)
+
+        self.assertEqual(self._metodos_guardados(), ['efectivo', 'efectivo'])
+
+    def test_metodo_invalido_responde_400_sin_guardar_nada(self):
+        for invalido in ('cheque', 'Tarjeta', '', 1, True, None, ['tarjeta'], {'metodo': 'tarjeta'}):
+            with self.subTest(invalido=invalido):
+                respuesta = self._crear(metodo_pago=invalido)
+
+                self.assertEqual(respuesta.status_code, 400)
+                self.assertEqual(respuesta.json()['codigo'], 'PAYLOAD_INVALIDO')
+                self.assertEqual(VentasLibres.objects.count(), 0)
+                self.assertEqual(PendienteProducto.objects.count(), 0)
+
+    def test_respuesta_no_cambia_al_enviar_metodo(self):
+        self.assertEqual(self._crear(metodo_pago='tarjeta').json(), {
+            'message': 'Ventas libres creadas',
+            'ventas_creadas': 2,
+            'asociaciones': {'auto': 0, 'pendientes': 2},
+        })
+
+
+class ResumenGerenciaMetodoPagoTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        Tipo.objects.create(tip_id=ROPA, tip_nombre='Ropa')
+        Dueno.objects.create(due_id=MIREYA, due_nombre='Mireya')
+        cls.con_dueno = Productos.objects.create(
+            pro_nombre='Polera', pro_precio=9999, pro_tipo_id=ROPA, pro_dueno_id=MIREYA,
+        )
+        cls.sin_dueno = Productos.objects.create(pro_nombre='Huerfano', pro_precio=4000, pro_tipo_id=ROPA)
+
+    def _libre(self, valor, metodo='efectivo', puesto=1, momento=MOMENTO):
+        return VentasLibres.objects.create(
+            vl_nombre='romy', vl_valor=valor, vl_fecha_registro=momento, vl_puesto=puesto, vl_metodo_pago=metodo,
+        )
+
+    def _venta_antigua(self, producto):
+        return Ventas.objects.create(ven_fecha_registro=MOMENTO, ven_productos=f'{producto.pro_id}_1', ven_puesto=1)
+
+    def _resumen(self, nivel='dia'):
+        respuesta = self.client.get(reverse('resumen_gerencia'), {'nivel': nivel, 'fecha': FECHA})
+        self.assertEqual(respuesta.status_code, 200)
+        return respuesta.json()
+
+    def test_sin_ventas_llegan_las_tres_claves_en_cero(self):
+        self.assertEqual(self._resumen()['por_metodo_pago'], {'efectivo': 0, 'tarjeta': 0, 'transferencia': 0})
+
+    def test_metodo_sin_ventas_llega_en_cero(self):
+        self._libre(1500, 'tarjeta')
+
+        self.assertEqual(self._resumen()['por_metodo_pago'], {'efectivo': 0, 'tarjeta': 1500, 'transferencia': 0})
+
+    def test_suma_vl_valor_por_metodo(self):
+        self._libre(100, 'efectivo')
+        self._libre(200, 'tarjeta')
+        self._libre(300, 'tarjeta', puesto=2)
+        self._libre(400, 'transferencia')
+
+        self.assertEqual(self._resumen()['por_metodo_pago'], {'efectivo': 100, 'tarjeta': 500, 'transferencia': 400})
+
+    def test_venta_antigua_cuenta_como_efectivo(self):
+        self._venta_antigua(self.con_dueno)
+
+        self.assertEqual(self._resumen()['por_metodo_pago'], {'efectivo': 9999, 'tarjeta': 0, 'transferencia': 0})
+
+    def test_montos_sin_dueno_no_cuentan(self):
+        self._venta_antigua(self.sin_dueno)
+        self._libre(5000, 'tarjeta', puesto=3)
+
+        resumen = self._resumen()
+
+        self.assertEqual(resumen['por_metodo_pago'], {'efectivo': 0, 'tarjeta': 0, 'transferencia': 0})
+        self.assertEqual(resumen['total'], 0)
+
+    def test_suma_de_metodos_es_igual_al_total_en_cada_nivel(self):
+        self._venta_antigua(self.con_dueno)
+        self._venta_antigua(self.sin_dueno)
+        self._libre(2000, 'efectivo')
+        self._libre(1500, 'tarjeta', puesto=2)
+        self._libre(5000, 'transferencia', puesto=3)
+        self._libre(700, 'transferencia', momento=datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc))
+        self._libre(300, 'tarjeta', momento=datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc))
+
+        base_dia = 9999 + 2000 + 1500
+        for nivel, esperado in (('dia', base_dia), ('semana', base_dia + 700), ('mes', base_dia + 1000)):
+            with self.subTest(nivel=nivel):
+                resumen = self._resumen(nivel)
+                self.assertEqual(resumen['total'], esperado)
+                self.assertEqual(sum(resumen['por_metodo_pago'].values()), resumen['total'])
+                self.assertEqual(sum(resumen['por_tipo'].values()), resumen['total'])
+
+    def test_numero_de_queries_no_crece_con_la_cantidad_de_ventas(self):
+        self._libre(100, 'tarjeta')
+        with CaptureQueriesContext(connection) as con_una_venta:
+            self._resumen()
+
+        for _ in range(30):
+            self._libre(100, 'transferencia')
+        with CaptureQueriesContext(connection) as con_treinta_ventas:
+            self._resumen()
+
+        self.assertEqual(len(con_treinta_ventas), len(con_una_venta))
+
+
 class CrearVentaLibreTests(TestCase):
     ITEMS_VALIDOS = [{'nombre': 'gasa', 'valor': 500}, {'nombre': 'curita', 'valor': 1000}, {'nombre': 'polera', 'valor': 2000}]
 
