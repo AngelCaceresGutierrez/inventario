@@ -400,6 +400,174 @@ class ResumenGerenciaMetodoPagoTests(TestCase):
         self.assertEqual(len(con_treinta_ventas), len(con_una_venta))
 
 
+class TotalesPorDiaTipoYMetodoPagoTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        for tip_id, nombre in ((ROPA, 'Ropa'), (PAQUETERIA, 'Paqueteria'), (UTILES, 'Utiles escolares')):
+            Tipo.objects.create(tip_id=tip_id, tip_nombre=nombre)
+        Dueno.objects.create(due_id=MIREYA, due_nombre='Mireya')
+        cls.polera = cls._producto('Polera', 1000, ROPA)
+        cls.cinta = cls._producto('Cinta', 500, PAQUETERIA)
+        cls.varios = cls._producto('Varios', 300, None)
+
+    @staticmethod
+    def _producto(nombre, precio, tipo):
+        return Productos.objects.create(pro_nombre=nombre, pro_precio=precio, pro_tipo_id=tipo, pro_dueno_id=MIREYA)
+
+    def _libre(self, nombre, valor=100, metodo='efectivo', puesto=1):
+        return VentasLibres.objects.create(
+            vl_nombre=nombre, vl_valor=valor, vl_fecha_registro=MOMENTO, vl_puesto=puesto, vl_metodo_pago=metodo,
+        )
+
+    def _venta(self, producto, cantidad=1, puesto=1):
+        return Ventas.objects.create(
+            ven_fecha_registro=MOMENTO, ven_productos=f'{producto.pro_id}_{cantidad}',
+            ven_monto_total=producto.pro_precio * cantidad, ven_puesto=puesto,
+        )
+
+    def _asociar(self, texto, producto):
+        return AsociacionProducto.objects.create(ap_texto=texto, ap_producto=producto, ap_fecha=MOMENTO)
+
+    def _totales(self, **filtros):
+        respuesta = self.client.get(reverse('totales_vendidos_por_dia'), {'fecha': FECHA, **filtros})
+        self.assertEqual(respuesta.status_code, 200)
+        return respuesta.json()['respuesta']
+
+    def _item(self, **filtros):
+        productos = self._totales(**filtros)['productos']
+        self.assertEqual(len(productos), 1)
+        return productos[0]
+
+    def test_libre_asociada_toma_el_tipo_de_la_asociacion(self):
+        self._asociar('romy', self.polera)
+        self._libre('Romy')
+
+        self.assertEqual(self._item()['tipo'], 'Ropa')
+
+    def test_asociacion_tiene_prioridad_sobre_el_nombre_exacto(self):
+        self._asociar('cinta', self.polera)
+        self._libre('cinta')
+
+        self.assertEqual(self._item()['tipo'], 'Ropa')
+
+    def test_libre_sin_asociacion_resuelve_por_nombre_exacto_normalizado(self):
+        self._producto('Cuadérno  Grande', 100, UTILES)
+        self._libre('  CUADERNO grande ')
+
+        self.assertEqual(self._item()['tipo'], 'Utiles escolares')
+
+    def test_libre_con_nombre_ambiguo_queda_sin_tipo(self):
+        self._producto('Lapiz', 100, ROPA)
+        self._producto('LÁPIZ', 200, UTILES)
+        self._libre('lapiz')
+
+        self.assertEqual(self._item()['tipo'], 'Sin tipo')
+
+    def test_libre_sin_coincidencia_queda_sin_tipo(self):
+        self._libre('cosa desconocida')
+
+        self.assertEqual(self._item()['tipo'], 'Sin tipo')
+
+    def test_libre_informa_su_metodo_de_pago(self):
+        for metodo in ('efectivo', 'tarjeta', 'transferencia'):
+            with self.subTest(metodo=metodo):
+                VentasLibres.objects.all().delete()
+                self._libre('romy', metodo=metodo)
+
+                self.assertEqual(self._item()['metodo_pago'], metodo)
+
+    def test_venta_de_tabla_ventas_informa_su_tipo_y_efectivo(self):
+        for producto, tipo in ((self.polera, 'Ropa'), (self.cinta, 'Paqueteria'), (self.varios, 'Sin tipo')):
+            with self.subTest(tipo=tipo):
+                Ventas.objects.all().delete()
+                self._venta(producto)
+
+                item = self._item()
+
+                self.assertEqual(item['tipo'], tipo)
+                self.assertEqual(item['metodo_pago'], 'efectivo')
+
+    def test_claves_existentes_del_item_no_cambian(self):
+        self._venta(self.polera, cantidad=2)
+        self._libre('romy', 700, 'tarjeta')
+
+        self.assertEqual(self._totales()['productos'], [
+            {'cantidad': 2, 'producto': 'Polera', 'precio': 1000, 'precio_total': 2000,
+             'tipo': 'Ropa', 'metodo_pago': 'efectivo'},
+            {'cantidad': 1, 'producto': 'romy', 'precio': 700, 'precio_total': 700,
+             'tipo': 'Sin tipo', 'metodo_pago': 'tarjeta'},
+        ])
+
+    def test_totales_no_cambian(self):
+        self._venta(self.polera, cantidad=2)
+        self._libre('polera', 700, 'tarjeta', puesto=1)
+        self._libre('cinta', 400, 'transferencia', puesto=2)
+
+        totales = self._totales()
+
+        self.assertEqual(totales['total_vendido'], 3100)
+        self.assertEqual(totales['vendido_mireya'], 2700)
+        self.assertEqual(totales['vendido_ivan'], 400)
+        self.assertEqual(totales['vendido_ropa'], 2000)
+        self.assertEqual(totales['vendido_paqueteria'], 0)
+
+    def test_filtro_por_puesto_se_mantiene(self):
+        self._venta(self.polera, puesto=1)
+        self._venta(self.cinta, puesto=2)
+        self._libre('polera', 700, 'tarjeta', puesto=1)
+        self._libre('cinta', 400, 'transferencia', puesto=2)
+
+        totales = self._totales(puesto=2)
+
+        self.assertEqual(totales['total_vendido'], 900)
+        self.assertEqual(
+            [(p['producto'], p['tipo'], p['metodo_pago']) for p in totales['productos']],
+            [('Cinta', 'Paqueteria', 'efectivo'), ('cinta', 'Paqueteria', 'transferencia')],
+        )
+
+    def test_mismo_tipo_que_resumen_gerencia_para_las_mismas_ventas(self):
+        self._producto('Lapiz', 100, ROPA)
+        self._producto('LÁPIZ', 200, UTILES)
+        self._producto('CINTA', 200, None)
+        self._asociar('romy', self.polera)
+        self._asociar('varios', self.varios)
+        self._venta(self.polera)
+        self._venta(self.varios)
+        for indice, nombre in enumerate(('Romy', 'cinta', 'lapiz', 'varios', 'desconocido', 'POLERA'), start=1):
+            self._libre(nombre, valor=10 ** indice)
+
+        por_tipo = {}
+        for item in self._totales()['productos']:
+            por_tipo[item['tipo']] = por_tipo.get(item['tipo'], 0) + item['precio_total']
+        resumen = self.client.get(reverse('resumen_gerencia'), {'nivel': 'dia', 'fecha': FECHA}).json()
+
+        self.assertEqual(por_tipo, resumen['por_tipo'])
+
+    def test_dia_sin_ventas_libres_no_consulta_catalogo_ni_asociaciones(self):
+        self._venta(self.polera)
+
+        # ventas + producto de la venta + ventas_libres
+        with self.assertNumQueries(3):
+            totales = self._totales()
+
+        self.assertEqual(totales['productos'][0]['tipo'], 'Ropa')
+
+    def test_una_query_de_asociaciones_y_una_de_catalogo_sin_importar_las_libres(self):
+        self._libre('texto 0')
+        with CaptureQueriesContext(connection) as con_una_libre:
+            self._totales()
+
+        for indice in range(1, 30):
+            self._asociar(f'texto {indice}', self.cinta)
+            self._libre(f'texto {indice}')
+        with CaptureQueriesContext(connection) as con_treinta_libres:
+            self._totales()
+
+        self.assertEqual(len(con_treinta_libres), len(con_una_libre))
+        self.assertEqual(len([q for q in con_treinta_libres if 'FROM "asociaciones_producto"' in q['sql']]), 1)
+        self.assertEqual(len([q for q in con_treinta_libres if 'FROM "productos"' in q['sql']]), 1)
+
+
 class CrearVentaLibreTests(TestCase):
     ITEMS_VALIDOS = [{'nombre': 'gasa', 'valor': 500}, {'nombre': 'curita', 'valor': 1000}, {'nombre': 'polera', 'valor': 2000}]
 

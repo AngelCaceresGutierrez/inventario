@@ -317,7 +317,10 @@ def totales_vendidos_por_dia(request):
                     'cantidad': cantidad_vendida, 
                     'producto': prod['pro_nombre'],
                     'precio': precio_unitario,
-                    'precio_total': precio_calculado
+                    'precio_total': precio_calculado,
+                    'tipo': RESUMEN_TIPOS_POR_ID.get(prod['pro_tipo_id'], RESUMEN_SIN_TIPO),
+                    # La tabla ventas no registra método de pago: cuenta como el valor por defecto.
+                    'metodo_pago': METODO_PAGO_POR_DEFECTO,
                 })
 
                 # Distribuir por tipo de producto
@@ -342,7 +345,7 @@ def totales_vendidos_por_dia(request):
     libres = VentasLibres.objects.filter(vl_fecha_registro__date = hoy)
     if puesto_val is not None:
         libres = libres.filter(vl_puesto = puesto_val)
-    libres = list(libres.values('vl_nombre', 'vl_valor', 'vl_puesto'))
+    libres = list(libres.values('vl_nombre', 'vl_valor', 'vl_puesto', 'vl_metodo_pago'))
 
     total_vendido += sum(l['vl_valor'] for l in libres)
 
@@ -352,12 +355,19 @@ def totales_vendidos_por_dia(request):
         elif lib['vl_puesto'] == 2:  # Ivan
             pro_ivan += lib['vl_valor']
 
-    for lib in libres:
+    nombres_normalizados = [_normalizar_texto(lib['vl_nombre']) for lib in libres]
+    tipo_id_asociado, tipos_id_por_nombre = _indices_tipo_venta_libre(
+        nombres_normalizados, Productos.objects.values('pro_nombre', 'pro_tipo_id'),
+    )
+
+    for lib, texto in zip(libres, nombres_normalizados):
         arr_productos.append({
             'cantidad': 1,
             'producto': lib['vl_nombre'],
             'precio': lib['vl_valor'],
             'precio_total': lib['vl_valor'],
+            'tipo': _tipo_venta_libre(texto, tipo_id_asociado, tipos_id_por_nombre),
+            'metodo_pago': lib['vl_metodo_pago'],
         })
 
     respuesta = {
@@ -761,12 +771,34 @@ def uso_gemini(request):
 
 # Mapeos por ID con el mismo criterio de totales_vendidos_por_dia, fijados por
 # contrato con el frontend. Si algún día cambian dueños/tipos en BD, actualizar
-# aquí (única fuente para este endpoint).
+# aquí. RESUMEN_TIPOS_POR_ID también etiqueta los ítems de totales_vendidos_por_dia;
+# los acumulados vendido_* de esa vista siguen comparando los IDs directamente.
 RESUMEN_DUENOS_POR_ID = {1: 'mireya', 2: 'ivan', 3: 'paulina'}
 RESUMEN_TIPOS_POR_ID = {1: 'Ropa', 2: 'Paqueteria', 3: 'Utiles escolares'}
 # Ventas libres: dueño = su puesto (1=Mireya, 2=Ivan); otros puestos solo por_puesto.
 RESUMEN_DUENO_POR_PUESTO_LIBRE = {1: 'mireya', 2: 'ivan'}
 RESUMEN_SIN_TIPO = 'Sin tipo'
+
+
+def _indices_tipo_venta_libre(textos_normalizados, productos):
+    """Índices que consume _tipo_venta_libre: (texto → tipo asociado, nombre
+    normalizado → tipos conocidos). productos: iterable de dicts con pro_nombre y
+    pro_tipo_id; si es un queryset, sin textos que resolver nunca se ejecuta."""
+    if not textos_normalizados:
+        return {}, {}
+
+    tipo_id_asociado = dict(AsociacionProducto.objects.filter(
+        ap_texto__in=set(textos_normalizados),
+    ).values_list('ap_texto', 'ap_producto__pro_tipo_id'))
+
+    # ponytail: normaliza el catálogo en Python en cada request (los acentos no se
+    # resuelven en SQL); si crece mucho, guardar el nombre normalizado en una columna.
+    tipos_id_por_nombre = {}
+    for producto in productos:
+        # Solo tipos conocidos: un duplicado sin tipo no debe anular al que sí lo tiene.
+        if producto['pro_nombre'] and producto['pro_tipo_id'] in RESUMEN_TIPOS_POR_ID:
+            tipos_id_por_nombre.setdefault(_normalizar_texto(producto['pro_nombre']), set()).add(producto['pro_tipo_id'])
+    return tipo_id_asociado, tipos_id_por_nombre
 
 
 def _tipo_venta_libre(texto, tipo_id_asociado, tipos_id_por_nombre):
@@ -784,8 +816,8 @@ def _tipo_venta_libre(texto, tipo_id_asociado, tipos_id_por_nombre):
 
 def _precio_con_oferta(cantidad, precio_normal, precio_oferta_str):
     """Precio total de un producto vendido respetando ofertas '2x1000'.
-    ponytail: duplicada de la copia local de totales_vendidos_por_dia porque
-    ese endpoint no debe modificarse; si se extrae, esta se elimina."""
+    ponytail: duplicada de calcular_precio_con_oferta, local en
+    totales_vendidos_por_dia; al unificarlas, esa vista debe usar esta función."""
     if precio_oferta_str and 'x' in precio_oferta_str:
         try:
             partes = precio_oferta_str.split('x')
@@ -893,17 +925,7 @@ def resumen_gerencia(request):
 
     # Tipo resuelto al consultar: asociar un pendiente incluye sus ventas pasadas.
     nombres_normalizados = [_normalizar_texto(lib['vl_nombre']) for lib in libres]
-    tipo_id_asociado = dict(AsociacionProducto.objects.filter(
-        ap_texto__in=set(nombres_normalizados),
-    ).values_list('ap_texto', 'ap_producto__pro_tipo_id'))
-
-    # ponytail: normaliza el catálogo en Python en cada request (los acentos no se
-    # resuelven en SQL); si crece mucho, guardar el nombre normalizado en una columna.
-    tipos_id_por_nombre = {}
-    for producto in mapa_productos.values():
-        # Solo tipos conocidos: un duplicado sin tipo no debe anular al que sí lo tiene.
-        if producto['pro_nombre'] and producto['pro_tipo_id'] in RESUMEN_TIPOS_POR_ID:
-            tipos_id_por_nombre.setdefault(_normalizar_texto(producto['pro_nombre']), set()).add(producto['pro_tipo_id'])
+    tipo_id_asociado, tipos_id_por_nombre = _indices_tipo_venta_libre(nombres_normalizados, mapa_productos.values())
 
     for lib, texto in zip(libres, nombres_normalizados):
         acumulador = desglose_bucket[_clave_bucket(nivel, lib['vl_fecha_registro'])]
