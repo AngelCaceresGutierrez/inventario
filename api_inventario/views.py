@@ -370,6 +370,24 @@ def totales_vendidos_por_dia(request):
             'metodo_pago': lib['vl_metodo_pago'],
         })
 
+    por_tipo = {tipo: 0 for tipo in (*RESUMEN_TIPOS_POR_ID.values(), RESUMEN_SIN_TIPO)}
+    por_metodo_pago = {metodo: 0 for metodo in METODOS_PAGO}
+    for item in arr_productos:
+        por_tipo[item['tipo']] += item['precio_total']
+        # Un método fuera del catálogo (dato legado o sin CHECK) no debe tumbar el menú.
+        metodo = item['metodo_pago'] if item['metodo_pago'] in por_metodo_pago else METODO_PAGO_POR_DEFECTO
+        por_metodo_pago[metodo] += item['precio_total']
+    # total_vendido usa el ven_monto_total cobrado, pero los ítems de la tabla ventas
+    # usan el precio actual y un producto borrado no genera ítem. La diferencia (solo
+    # puede venir de esa tabla: las libres cuadran exacto) va a 'Sin tipo' y al método
+    # por defecto para que ambos desgloses sumen total_vendido. Solo se ajusta si es
+    # positiva: los montos se muestran en pantalla y ninguno puede quedar negativo. Si
+    # el precio actual supera lo cobrado, los desgloses quedan como suma de ítems y
+    # pueden superar levemente total_vendido.
+    diferencia = max(0, total_vendido - sum(por_tipo.values()))
+    por_tipo[RESUMEN_SIN_TIPO] += diferencia
+    por_metodo_pago[METODO_PAGO_POR_DEFECTO] += diferencia
+
     respuesta = {
         'fecha': hoy.strftime("%d-%m-%Y"),
         'total_vendido': total_vendido,
@@ -379,7 +397,9 @@ def totales_vendidos_por_dia(request):
         'vendido_ropa': pro_ropa,
         'vendido_paqueteria': pro_paqueteria,
         'vendido_utiles': pro_utiles,
-        'productos': list(arr_productos)
+        'productos': list(arr_productos),
+        'por_metodo_pago': por_metodo_pago,
+        'por_tipo': por_tipo,
     }
 
     return Response({'respuesta': respuesta})

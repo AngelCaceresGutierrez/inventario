@@ -419,10 +419,10 @@ class TotalesPorDiaTipoYMetodoPagoTests(TestCase):
             vl_nombre=nombre, vl_valor=valor, vl_fecha_registro=MOMENTO, vl_puesto=puesto, vl_metodo_pago=metodo,
         )
 
-    def _venta(self, producto, cantidad=1, puesto=1):
+    def _venta(self, producto, cantidad=1, puesto=1, monto=None, productos=None):
         return Ventas.objects.create(
-            ven_fecha_registro=MOMENTO, ven_productos=f'{producto.pro_id}_{cantidad}',
-            ven_monto_total=producto.pro_precio * cantidad, ven_puesto=puesto,
+            ven_fecha_registro=MOMENTO, ven_productos=productos or f'{producto.pro_id}_{cantidad}',
+            ven_monto_total=producto.pro_precio * cantidad if monto is None else monto, ven_puesto=puesto,
         )
 
     def _asociar(self, texto, producto):
@@ -542,6 +542,91 @@ class TotalesPorDiaTipoYMetodoPagoTests(TestCase):
         resumen = self.client.get(reverse('resumen_gerencia'), {'nivel': 'dia', 'fecha': FECHA}).json()
 
         self.assertEqual(por_tipo, resumen['por_tipo'])
+
+    def _assert_desgloses_suman_total(self, totales):
+        self.assertEqual(sum(totales['por_tipo'].values()), totales['total_vendido'])
+        self.assertEqual(sum(totales['por_metodo_pago'].values()), totales['total_vendido'])
+
+    def test_dia_vacio_trae_todas_las_claves_en_cero(self):
+        totales = self._totales()
+
+        self.assertEqual(totales['por_metodo_pago'], {'efectivo': 0, 'tarjeta': 0, 'transferencia': 0})
+        self.assertEqual(totales['por_tipo'], {'Ropa': 0, 'Paqueteria': 0, 'Utiles escolares': 0, 'Sin tipo': 0})
+
+    def test_por_metodo_pago_suma_cada_metodo(self):
+        self._libre('romy', 100, 'efectivo')
+        self._libre('romy', 200, 'tarjeta')
+        self._libre('romy', 300, 'tarjeta', puesto=2)
+        self._libre('romy', 400, 'transferencia')
+
+        totales = self._totales()
+
+        self.assertEqual(totales['por_metodo_pago'], {'efectivo': 100, 'tarjeta': 500, 'transferencia': 400})
+        self._assert_desgloses_suman_total(totales)
+
+    def test_metodo_desconocido_acumula_en_efectivo_sin_fallar(self):
+        self._libre('romy', 100, 'cheque')
+        self._libre('romy', 200, 'tarjeta')
+
+        totales = self._totales()
+
+        self.assertEqual(totales['por_metodo_pago'], {'efectivo': 100, 'tarjeta': 200, 'transferencia': 0})
+        self._assert_desgloses_suman_total(totales)
+
+    def test_por_tipo_suma_los_cuatro_tipos(self):
+        self._producto('Cuaderno', 100, UTILES)
+        self._libre('polera', 10)
+        self._libre('cinta', 20)
+        self._libre('cuaderno', 30)
+        self._libre('desconocido', 40)
+
+        totales = self._totales()
+
+        self.assertEqual(totales['por_tipo'], {'Ropa': 10, 'Paqueteria': 20, 'Utiles escolares': 30, 'Sin tipo': 40})
+        self._assert_desgloses_suman_total(totales)
+
+    def test_desgloses_respetan_el_filtro_por_puesto(self):
+        self._venta(self.polera, puesto=1)
+        self._venta(self.cinta, puesto=2)
+        self._libre('polera', 700, 'tarjeta', puesto=1)
+        self._libre('desconocido', 400, 'transferencia', puesto=2)
+
+        totales = self._totales(puesto=2)
+
+        self.assertEqual(totales['por_tipo'], {'Ropa': 0, 'Paqueteria': 500, 'Utiles escolares': 0, 'Sin tipo': 400})
+        self.assertEqual(totales['por_metodo_pago'], {'efectivo': 500, 'tarjeta': 0, 'transferencia': 400})
+
+    def test_venta_de_tabla_ventas_suma_a_su_tipo_y_a_efectivo(self):
+        self._venta(self.polera, cantidad=2)
+        self._venta(self.varios)
+
+        totales = self._totales()
+
+        self.assertEqual(totales['por_tipo'], {'Ropa': 2000, 'Paqueteria': 0, 'Utiles escolares': 0, 'Sin tipo': 300})
+        self.assertEqual(totales['por_metodo_pago'], {'efectivo': 2300, 'tarjeta': 0, 'transferencia': 0})
+
+    def test_diferencia_entre_monto_cobrado_y_items_va_a_sin_tipo_y_efectivo(self):
+        # Cobrado 1800: polera (1000 recalculado) + producto borrado (sin ítem).
+        self._venta(self.polera, monto=1800, productos=f'{self.polera.pro_id}_1;999999_1')
+        self._libre('cinta', 400, 'tarjeta')
+
+        totales = self._totales()
+
+        self.assertEqual(totales['total_vendido'], 2200)
+        self.assertEqual(totales['por_tipo'], {'Ropa': 1000, 'Paqueteria': 400, 'Utiles escolares': 0, 'Sin tipo': 800})
+        self.assertEqual(totales['por_metodo_pago'], {'efectivo': 1800, 'tarjeta': 400, 'transferencia': 0})
+
+    def test_precio_actual_mayor_a_lo_cobrado_no_ajusta_ni_deja_negativos(self):
+        self._venta(self.polera, monto=900)
+        self._libre('cinta', 400, 'transferencia')
+
+        totales = self._totales()
+
+        self.assertEqual(totales['total_vendido'], 1300)
+        self.assertEqual(totales['por_tipo'], {'Ropa': 1000, 'Paqueteria': 400, 'Utiles escolares': 0, 'Sin tipo': 0})
+        self.assertEqual(totales['por_metodo_pago'], {'efectivo': 1000, 'tarjeta': 0, 'transferencia': 400})
+        for desglose in (totales['por_tipo'], totales['por_metodo_pago']):
+            self.assertTrue(all(monto >= 0 for monto in desglose.values()), desglose)
 
     def test_dia_sin_ventas_libres_no_consulta_catalogo_ni_asociaciones(self):
         self._venta(self.polera)
