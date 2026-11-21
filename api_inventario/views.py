@@ -10,7 +10,9 @@ import difflib
 import random
 import string
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+import logging
 import time
 import requests
 import json
@@ -35,6 +37,74 @@ TAMANO_MAXIMO_IMAGEN = 5 * 1024 * 1024
 VALOR_MAXIMO_INT4 = 2147483647  # Tope de las columnas INTEGER de Postgres
 METODOS_PAGO = ('efectivo', 'tarjeta', 'transferencia')  # Mismos valores que el CHECK de ventas_libres
 METODO_PAGO_POR_DEFECTO = 'efectivo'
+
+# ---------------------------------------------------------------------------
+# Fechas: las ventas se guardan como instante UTC (como todo el histórico: en
+# Render datetime.now() ya era UTC). Los "días" del negocio son días de Chile.
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
+ZONA_NEGOCIO = ZoneInfo('America/Santiago')
+FECHA_REGISTRO_MINIMA = datetime(2020, 1, 1, tzinfo=timezone.utc)
+FECHA_REGISTRO_MAXIMO_ADELANTO = timedelta(days=7)
+MENSAJE_FECHA_REGISTRO_INVALIDA = 'fecha_registro inválida: ISO 8601 con offset (ej. 2026-11-20T15:30:12-03:00)'
+_SIN_FECHA_REGISTRO = object()  # Campo ausente (app antigua) ≠ null explícito (inválido)
+
+
+def _ahora_utc():
+    return datetime.now(timezone.utc)
+
+
+def _hoy_local():
+    return _ahora_utc().astimezone(ZONA_NEGOCIO).date()
+
+
+def _a_hora_local(momento):
+    """Instante leído de la BD → hora de Chile. Naive = UTC (columnas sin tz)."""
+    if momento.tzinfo is None:
+        momento = momento.replace(tzinfo=timezone.utc)
+    return momento.astimezone(ZONA_NEGOCIO)
+
+
+def _rango_utc(desde, hasta):
+    """Días locales [desde, hasta) → (inicio, fin) UTC para filtrar con __gte/__lt.
+    zoneinfo resuelve los cambios de horario: si la medianoche no existe (inicio
+    del horario de verano), fold=0 da justo el instante de la transición."""
+    return tuple(
+        datetime.combine(dia, datetime.min.time(), tzinfo=ZONA_NEGOCIO).astimezone(timezone.utc)
+        for dia in (desde, hasta)
+    )
+
+
+def _fecha_registro(datos):
+    """Instante de la venta según el teléfono, en UTC. Sin el campo: hora del
+    servidor. None solo si el formato es inválido (no string, sin offset o
+    imposible de interpretar). Un reloj del teléfono desajustado (antes de 2020
+    o más de 7 días en el futuro) no impide vender: se usa la hora del servidor
+    y queda un aviso en el log."""
+    valor = datos.get('fecha_registro', _SIN_FECHA_REGISTRO)
+    ahora = _ahora_utc()
+    if valor is _SIN_FECHA_REGISTRO:
+        return ahora
+    if not isinstance(valor, str):
+        return None
+    try:
+        instante = datetime.fromisoformat(valor.strip())
+    except ValueError:
+        return None
+    if instante.utcoffset() is None:
+        return None
+    try:
+        instante = instante.astimezone(timezone.utc)
+    except OverflowError:  # Año 1 o 9999 cerca del límite: fuera de rango, no mal formado
+        instante = None
+    if instante is None or not FECHA_REGISTRO_MINIMA <= instante <= ahora + FECHA_REGISTRO_MAXIMO_ADELANTO:
+        logger.warning(
+            'fecha_registro fuera de rango (%s); se usa la hora del servidor %s',
+            instante.isoformat() if instante else 'desborda UTC', ahora.isoformat(),
+        )
+        return ahora
+    return instante
 
 PROMPT_LECTURA_NOTA = (
     "Transcribe esta nota manuscrita de ventas de feria. Cada línea tiene el formato "
@@ -188,6 +258,9 @@ def productos_por_tipo(request):
 @api_view(['POST'])
 def crear_venta(request):
     arrProductos = request.data.get('arr')
+    fecha_registro = _fecha_registro(request.data)
+    if fecha_registro is None:
+        return _respuesta_invalido(MENSAJE_FECHA_REGISTRO_INVALIDA)
     monto_total = 0
     productos_vendidos = ''
     # Recorrer el array de productos
@@ -210,7 +283,7 @@ def crear_venta(request):
         Ventas.objects.create(
             ven_monto_total=monto_total,
             ven_productos=productos_vendidos,
-            ven_fecha_registro=datetime.now(),
+            ven_fecha_registro=fecha_registro,
             ven_puesto = arr['puesto']
         )
         
@@ -253,10 +326,12 @@ def totales_vendidos_por_dia(request):
     pro_paqueteria = 0
     pro_utiles = 0
 
+    # `fecha` es un día de Chile; sin ella, "hoy" en Chile (no en UTC del servidor).
     if not hoy:
-        hoy = datetime.now().date()
+        hoy = _hoy_local()
     else:
-        hoy = datetime.strptime(hoy.strip(), '%Y-%m-%d')
+        hoy = datetime.strptime(hoy.strip(), '%Y-%m-%d').date()
+    inicio, fin = _rango_utc(hoy, hoy + timedelta(days=1))
 
     # Filtro opcional por puesto (si no viene: comportamiento global de siempre)
     puesto_val = None
@@ -270,7 +345,7 @@ def totales_vendidos_por_dia(request):
 
     total_vendido = 0
 
-    ventas = Ventas.objects.filter(ven_fecha_registro__date = hoy)
+    ventas = Ventas.objects.filter(ven_fecha_registro__gte=inicio, ven_fecha_registro__lt=fin)
     if puesto_val is not None:
         ventas = ventas.filter(ven_puesto = puesto_val)
     ventas = ventas.values()
@@ -342,7 +417,7 @@ def totales_vendidos_por_dia(request):
     # Ventas libres del día (ítems sin vínculo al inventario): suman al total,
     # se listan en productos[] y se atribuyen al dueño de su puesto
     # (1 = Mireya, 2 = Ivan) — no son una categoría aparte.
-    libres = VentasLibres.objects.filter(vl_fecha_registro__date = hoy)
+    libres = VentasLibres.objects.filter(vl_fecha_registro__gte=inicio, vl_fecha_registro__lt=fin)
     if puesto_val is not None:
         libres = libres.filter(vl_puesto = puesto_val)
     libres = list(libres.values('vl_nombre', 'vl_valor', 'vl_puesto', 'vl_metodo_pago'))
@@ -477,6 +552,9 @@ def crear_venta_libre(request):
     metodo_pago = request.data.get('metodo_pago', METODO_PAGO_POR_DEFECTO)
     if metodo_pago not in METODOS_PAGO:
         return _respuesta_invalido('Método de pago inválido: debe ser efectivo, tarjeta o transferencia')
+    fecha_registro = _fecha_registro(request.data)
+    if fecha_registro is None:
+        return _respuesta_invalido(MENSAJE_FECHA_REGISTRO_INVALIDA)
 
     # Whitelist: por ítem solo se leen nombre y valor; todo lo demás se ignora.
     for i, item in enumerate(items):
@@ -490,9 +568,10 @@ def crear_venta_libre(request):
             return _respuesta_invalido(f'Item inválido [{i}]: valor fuera de rango (máximo {VALOR_MAXIMO_INT4})')
 
     try:
-        # Fecha NAIVE igual que todo el proyecto (columnas TIMESTAMP sin tz,
-        # datos históricos naive, hora local Chile UTC-3): NO usar timezone.now().
-        ahora = datetime.now()
+        # Instantes aware en UTC, igual que el histórico (en Render datetime.now()
+        # naive era UTC y Django lo guardaba así; no era hora de Chile). La venta
+        # lleva el instante del teléfono; las asociaciones, la hora del servidor.
+        ahora = _ahora_utc()
         auto = pendientes = 0
         # Todo o nada: una venta parcial se duplicaría cuando el cliente reintente.
         with transaction.atomic():
@@ -500,7 +579,7 @@ def crear_venta_libre(request):
                 VentasLibres.objects.create(
                     vl_nombre=item['nombre'].strip(),
                     vl_valor=item['valor'],
-                    vl_fecha_registro=ahora,
+                    vl_fecha_registro=fecha_registro,
                     vl_puesto=puesto,
                     vl_metodo_pago=metodo_pago,
                 )
@@ -853,12 +932,16 @@ def _precio_con_oferta(cantidad, precio_normal, precio_oferta_str):
     return precio_normal * cantidad
 
 
-def _clave_bucket(nivel, fecha_hora):
-    """Clave de serie para un timestamp: hora '0'..'23' en nivel dia,
-    fecha 'YYYY-MM-DD' en mes/semana."""
+def _clave_bucket(nivel, fecha_hora, zona_horas):
+    """Clave de serie para un instante: hora '0'..'23' en nivel dia (en
+    zona_horas), fecha 'YYYY-MM-DD' de Chile en mes/semana.
+    zona_horas es UTC por compatibilidad con la app 1.12, que convierte la hora
+    UTC→local; la app nueva pide zona=local y recibe horas de Chile. Con hora
+    local, en la noche en que termina el horario de verano las dos 23:xx caen
+    en '23'; en UTC, el día de 25 horas junta dos horas en la misma clave."""
     if nivel == 'dia':
-        return str(fecha_hora.hour)
-    return fecha_hora.date().isoformat()
+        return str(_a_hora_local(fecha_hora).astimezone(zona_horas).hour)
+    return _a_hora_local(fecha_hora).date().isoformat()
 
 
 @api_view(['GET'])
@@ -868,6 +951,8 @@ def resumen_gerencia(request):
     nivel = request.GET.get('nivel', 'mes')
     if nivel not in ('mes', 'semana', 'dia'):
         return _respuesta_invalido('Nivel inválido: debe ser mes, semana o dia')
+    # Solo afecta las claves de hora del nivel dia; cualquier otro valor = UTC (app 1.12).
+    zona_horas = ZONA_NEGOCIO if request.GET.get('zona') == 'local' else timezone.utc
 
     fecha_param = request.GET.get('fecha')
     if fecha_param:
@@ -876,25 +961,21 @@ def resumen_gerencia(request):
         except ValueError:
             return _respuesta_invalido('Fecha inválida: formato esperado YYYY-MM-DD')
     else:
-        # Criterio naive del proyecto (columnas TIMESTAMP sin tz): nunca timezone.now()
-        fecha = datetime.now().date()
+        fecha = _hoy_local()  # "hoy" en Chile, no en UTC del servidor
 
-    # Rango [inicio, fin) naive + claves de bucket según nivel (todos los
-    # buckets del periodo van en la serie, sin ventas = ceros).
+    # Periodo en días de Chile [desde, desde + dias) → rango UTC para filtrar.
+    # Todos los buckets del periodo van en la serie (sin ventas = ceros).
     if nivel == 'dia':
-        inicio = datetime.combine(fecha, datetime.min.time())
-        fin = inicio + timedelta(days=1)
-        claves_bucket = [str(hora) for hora in range(24)]
+        desde, dias = fecha, 1
     elif nivel == 'semana':
-        lunes = fecha - timedelta(days=fecha.weekday())
-        inicio = datetime.combine(lunes, datetime.min.time())
-        fin = inicio + timedelta(days=7)
-        claves_bucket = [(inicio + timedelta(days=dia)).date().isoformat() for dia in range(7)]
+        desde, dias = fecha - timedelta(days=fecha.weekday()), 7
     else:  # mes
-        primer_dia = fecha.replace(day=1)
-        inicio = datetime.combine(primer_dia, datetime.min.time())
-        fin = inicio + timedelta(days=calendar.monthrange(fecha.year, fecha.month)[1])
-        claves_bucket = [(inicio + timedelta(days=dia)).date().isoformat() for dia in range((fin - inicio).days)]
+        desde, dias = fecha.replace(day=1), calendar.monthrange(fecha.year, fecha.month)[1]
+    inicio, fin = _rango_utc(desde, desde + timedelta(days=dias))
+    if nivel == 'dia':
+        claves_bucket = [str(hora) for hora in range(24)]
+    else:
+        claves_bucket = [(desde + timedelta(days=dia)).isoformat() for dia in range(dias)]
 
     desglose_bucket = {clave: {'mireya': 0, 'ivan': 0, 'paulina': 0} for clave in claves_bucket}
     por_dueno = {'mireya': 0, 'ivan': 0, 'paulina': 0}
@@ -913,7 +994,7 @@ def resumen_gerencia(request):
     )}
 
     for ven in ventas:
-        acumulador = desglose_bucket[_clave_bucket(nivel, ven['ven_fecha_registro'])]
+        acumulador = desglose_bucket[_clave_bucket(nivel, ven['ven_fecha_registro'], zona_horas)]
         for trozo in ven['ven_productos'].split(';'):
             partes = trozo.split('_')
             # Trozo malformado o producto borrado: sin dueño/tipo conocido,
@@ -948,7 +1029,7 @@ def resumen_gerencia(request):
     tipo_id_asociado, tipos_id_por_nombre = _indices_tipo_venta_libre(nombres_normalizados, mapa_productos.values())
 
     for lib, texto in zip(libres, nombres_normalizados):
-        acumulador = desglose_bucket[_clave_bucket(nivel, lib['vl_fecha_registro'])]
+        acumulador = desglose_bucket[_clave_bucket(nivel, lib['vl_fecha_registro'], zona_horas)]
         dueno = RESUMEN_DUENO_POR_PUESTO_LIBRE.get(lib['vl_puesto'])
         if dueno:
             acumulador[dueno] += lib['vl_valor']

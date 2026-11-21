@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from django.apps import apps
@@ -718,3 +718,241 @@ class CrearVentaLibreTests(TestCase):
         self.assertEqual(VentasLibres.objects.count(), 3)
         self.assertEqual(AsociacionProducto.objects.get().ap_producto_id, self.polera.pro_id)
         self.assertEqual(PendienteProducto.objects.count(), 2)
+
+
+def _utc(*partes):
+    return datetime(*partes, tzinfo=timezone.utc)
+
+
+class FechaRegistroDelTelefonoTests(TestCase):
+    """Instante de la venta enviado por el teléfono (ISO 8601 con offset), guardado en UTC."""
+    ITEMS = [{'nombre': 'gasa', 'valor': 500}, {'nombre': 'curita', 'valor': 1000}]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.polera = Productos.objects.create(pro_nombre='Polera', pro_precio=1000)
+
+    def _crear_libre(self, **extra):
+        return self.client.post(
+            reverse('crear_venta_libre'), {'puesto': 1, 'items': self.ITEMS, **extra}, content_type='application/json',
+        )
+
+    def _crear_venta(self, **extra):
+        arr = [{'pro_id': self.polera.pro_id, 'pro_cantidad': 1, 'pro_subtotal': 1000, 'puesto': 1}]
+        return self.client.post(reverse('crear_venta'), {'arr': arr, **extra}, content_type='application/json')
+
+    # Formato inválido: 400 sin guardar.
+    INVALIDAS = (
+        'ayer', '', 123, None, ['2026-11-20T15:30:12-03:00'],
+        '2026-11-20T15:30:12',           # sin offset
+        '2026-11-20',                     # solo fecha, sin offset
+        '2026-11-20T25:00:00-03:00',      # hora imposible
+    )
+
+    def _fuera_de_rango(self):
+        """Formato válido pero reloj del teléfono desajustado: se guarda con la hora del servidor."""
+        return (
+            '2019-12-31T12:00:00-03:00',      # antes de 2020
+            '9999-12-31T23:59:59-03:00',      # desborda al pasar a UTC
+            '0001-01-01T00:00:00+01:00',      # desborda al pasar a UTC
+            (datetime.now(timezone.utc) + timedelta(days=8)).isoformat(),
+        )
+
+    def _assert_guarda_con_hora_del_servidor(self, crear, modelo, campo):
+        for fuera in self._fuera_de_rango():
+            with self.subTest(fecha_registro=fuera):
+                modelo.objects.all().delete()
+                antes = datetime.now(timezone.utc)
+                with self.assertLogs('api_inventario.views', level='WARNING') as logs:
+                    respuesta = crear(fecha_registro=fuera)
+                despues = datetime.now(timezone.utc)
+
+                self.assertEqual(respuesta.status_code, 200)
+                momentos = list(modelo.objects.values_list(campo, flat=True))
+                self.assertTrue(momentos)
+                for momento in momentos:
+                    self.assertTrue(antes <= momento <= despues, momento)
+                self.assertIn('fuera de rango', logs.output[0])
+
+    def test_libre_guarda_el_instante_del_telefono_en_utc_en_todos_los_items(self):
+        respuesta = self._crear_libre(fecha_registro='2026-11-20T15:30:12-03:00')
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            list(VentasLibres.objects.values_list('vl_fecha_registro', flat=True)),
+            [_utc(2026, 11, 20, 18, 30, 12)] * 2,
+        )
+
+    def test_libre_sin_fecha_registro_usa_la_hora_del_servidor(self):
+        antes = datetime.now(timezone.utc)
+        self.assertEqual(self._crear_libre().status_code, 200)
+        despues = datetime.now(timezone.utc)
+
+        for momento in VentasLibres.objects.values_list('vl_fecha_registro', flat=True):
+            self.assertTrue(antes <= momento <= despues, momento)
+
+    def test_libre_con_fecha_registro_fuera_de_rango_guarda_con_la_hora_del_servidor(self):
+        self._assert_guarda_con_hora_del_servidor(self._crear_libre, VentasLibres, 'vl_fecha_registro')
+
+    def test_venta_antigua_con_fecha_registro_fuera_de_rango_guarda_con_la_hora_del_servidor(self):
+        self._assert_guarda_con_hora_del_servidor(self._crear_venta, Ventas, 'ven_fecha_registro')
+
+    def test_libre_con_fecha_registro_invalida_responde_400_sin_guardar(self):
+        for invalida in self.INVALIDAS:
+            with self.subTest(fecha_registro=invalida):
+                respuesta = self._crear_libre(fecha_registro=invalida)
+
+                self.assertEqual(respuesta.status_code, 400)
+                self.assertEqual(respuesta.json()['codigo'], 'PAYLOAD_INVALIDO')
+                self.assertEqual(VentasLibres.objects.count(), 0)
+                self.assertEqual(PendienteProducto.objects.count(), 0)
+
+    def test_libre_acepta_hasta_siete_dias_en_el_futuro(self):
+        futura = datetime.now(timezone.utc) + timedelta(days=6, hours=23)
+
+        self.assertEqual(self._crear_libre(fecha_registro=futura.isoformat()).status_code, 200)
+
+    def test_venta_antigua_guarda_el_instante_del_telefono(self):
+        respuesta = self._crear_venta(fecha_registro='2026-11-20T22:30:00-03:00')
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(Ventas.objects.get().ven_fecha_registro, _utc(2026, 11, 21, 1, 30))
+
+    def test_venta_antigua_sin_fecha_registro_usa_la_hora_del_servidor(self):
+        antes = datetime.now(timezone.utc)
+        self.assertEqual(self._crear_venta().status_code, 200)
+
+        self.assertTrue(antes <= Ventas.objects.get().ven_fecha_registro <= datetime.now(timezone.utc))
+
+    def test_venta_antigua_con_fecha_registro_invalida_responde_400_sin_guardar(self):
+        for invalida in self.INVALIDAS:
+            with self.subTest(fecha_registro=invalida):
+                respuesta = self._crear_venta(fecha_registro=invalida)
+
+                self.assertEqual(respuesta.status_code, 400)
+                self.assertEqual(Ventas.objects.count(), 0)
+
+
+class DiasEnHoraDeChileTests(TestCase):
+    """`fecha` y los buckets se interpretan en hora local de Chile (America/Santiago)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        Dueno.objects.create(due_id=MIREYA, due_nombre='Mireya')
+        cls.polera = Productos.objects.create(pro_nombre='Polera', pro_precio=1000, pro_dueno_id=MIREYA)
+
+    def _libre(self, momento, valor=100):
+        return VentasLibres.objects.create(vl_nombre='romy', vl_valor=valor, vl_fecha_registro=momento, vl_puesto=1)
+
+    def _totales(self, **params):
+        respuesta = self.client.get(reverse('totales_vendidos_por_dia'), params)
+        self.assertEqual(respuesta.status_code, 200)
+        return respuesta.json()['respuesta']
+
+    def _resumen(self, **params):
+        respuesta = self.client.get(reverse('resumen_gerencia'), params)
+        self.assertEqual(respuesta.status_code, 200)
+        return respuesta.json()
+
+    def _buckets_con_ventas(self, resumen):
+        return {s['bucket']: s['total'] for s in resumen['serie'] if s['total']}
+
+    def test_venta_de_las_2230_de_chile_cae_en_su_dia_local(self):
+        self._libre(_utc(2026, 11, 21, 1, 30), 700)  # 22:30 del 20-11 en Chile (-03)
+        Ventas.objects.create(
+            ven_fecha_registro=_utc(2026, 11, 21, 1, 30), ven_productos=f'{self.polera.pro_id}_1',
+            ven_monto_total=1000, ven_puesto=1,
+        )
+
+        self.assertEqual(self._totales(fecha='2026-11-20')['total_vendido'], 1700)
+        self.assertEqual(self._totales(fecha='2026-11-21')['total_vendido'], 0)
+        dia = self._resumen(nivel='dia', fecha='2026-11-20', zona='local')
+        self.assertEqual(dia['total'], 1700)
+        self.assertEqual(self._buckets_con_ventas(dia), {'22': 1700})
+        # App 1.12 (sin zona): mismo día local, claves en hora UTC.
+        dia_utc = self._resumen(nivel='dia', fecha='2026-11-20')
+        self.assertEqual(dia_utc['total'], 1700)
+        self.assertEqual(self._buckets_con_ventas(dia_utc), {'1': 1700})
+        self.assertEqual(self._resumen(nivel='dia', fecha='2026-11-21')['total'], 0)
+        self.assertEqual(self._buckets_con_ventas(self._resumen(nivel='semana', fecha='2026-11-20')), {'2026-11-20': 1700})
+        self.assertEqual(self._buckets_con_ventas(self._resumen(nivel='mes', fecha='2026-11-20')), {'2026-11-20': 1700})
+
+    def test_limites_del_dia_local(self):
+        self._libre(_utc(2026, 11, 20, 2, 59, 59), 1)   # 23:59:59 del 19-11
+        self._libre(_utc(2026, 11, 20, 3, 0), 10)        # 00:00 del 20-11
+        self._libre(_utc(2026, 11, 21, 2, 59, 59), 100)  # 23:59:59 del 20-11
+        self._libre(_utc(2026, 11, 21, 3, 0), 1000)      # 00:00 del 21-11
+
+        self.assertEqual(self._totales(fecha='2026-11-20')['total_vendido'], 110)
+        self.assertEqual(
+            self._buckets_con_ventas(self._resumen(nivel='dia', fecha='2026-11-20', zona='local')), {'0': 10, '23': 100},
+        )
+        self.assertEqual(self._buckets_con_ventas(self._resumen(nivel='dia', fecha='2026-11-20')), {'3': 10, '2': 100})
+
+    def test_con_zona_local_los_buckets_por_hora_van_en_hora_local(self):
+        self._libre(_utc(2026, 11, 17, 13, 15), 1)  # 10:15 en Chile
+        self._libre(_utc(2026, 11, 17, 17, 45), 2)  # 14:45 en Chile
+
+        resumen = self._resumen(nivel='dia', fecha='2026-11-17', zona='local')
+
+        self.assertEqual(self._buckets_con_ventas(resumen), {'10': 1, '14': 2})
+
+    def test_sin_zona_los_buckets_por_hora_siguen_en_utc(self):
+        self._libre(_utc(2026, 11, 17, 13, 15), 1)  # 10:15 en Chile
+        self._libre(_utc(2026, 11, 17, 17, 45), 2)  # 14:45 en Chile
+
+        resumen = self._resumen(nivel='dia', fecha='2026-11-17')
+
+        self.assertEqual(self._buckets_con_ventas(resumen), {'13': 1, '17': 2})
+        self.assertEqual([s['bucket'] for s in resumen['serie']], [str(hora) for hora in range(24)])
+
+    def test_zona_no_cambia_las_claves_de_semana_y_mes(self):
+        self._libre(_utc(2026, 11, 21, 1, 30), 700)  # 22:30 del 20-11 en Chile
+
+        for nivel in ('semana', 'mes'):
+            with self.subTest(nivel=nivel):
+                sin_zona = self._resumen(nivel=nivel, fecha='2026-11-20')
+                con_zona = self._resumen(nivel=nivel, fecha='2026-11-20', zona='local')
+                self.assertEqual(self._buckets_con_ventas(sin_zona), {'2026-11-20': 700})
+                self.assertEqual(sin_zona['serie'], con_zona['serie'])
+
+    @patch('api_inventario.views._ahora_utc', return_value=_utc(2026, 11, 21, 1, 30))
+    def test_sin_fecha_hoy_es_la_fecha_local(self, _ahora):
+        self._libre(_utc(2026, 11, 21, 1, 0), 500)  # 22:00 del 20-11 en Chile
+
+        totales = self._totales()
+        self.assertEqual(totales['fecha'], '20-11-2026')
+        self.assertEqual(totales['total_vendido'], 500)
+        resumen = self._resumen(nivel='dia')
+        self.assertEqual(resumen['fecha'], '2026-11-20')
+        self.assertEqual(resumen['total'], 500)
+
+    def test_mes_que_cruza_el_fin_del_horario_de_verano(self):
+        # Abril 2026: el 05-04 a las 00:00 (-03) vuelve a las 23:00 del 04-04 (-04).
+        self._libre(_utc(2026, 4, 1, 2, 30), 1)      # 23:30 del 31-03 (-03): fuera
+        self._libre(_utc(2026, 4, 1, 3, 30), 10)     # 00:30 del 01-04 (-03)
+        self._libre(_utc(2026, 4, 5, 2, 30), 100)    # 23:30 del 04-04 (-03), primera vez
+        self._libre(_utc(2026, 4, 5, 3, 30), 1000)   # 23:30 del 04-04 (-04), segunda vez
+        self._libre(_utc(2026, 5, 1, 3, 30), 10000)  # 23:30 del 30-04 (-04)
+        self._libre(_utc(2026, 5, 1, 4, 0), 100000)  # 00:00 del 01-05 (-04): fuera
+
+        mes = self._resumen(nivel='mes', fecha='2026-04-15')
+
+        self.assertEqual(len(mes['serie']), 30)
+        self.assertEqual(mes['total'], 11110)
+        self.assertEqual(
+            self._buckets_con_ventas(mes), {'2026-04-01': 10, '2026-04-04': 1100, '2026-04-30': 10000},
+        )
+        dia = self._resumen(nivel='dia', fecha='2026-04-04', zona='local')
+        self.assertEqual(self._buckets_con_ventas(dia), {'23': 1100})
+        self.assertEqual(self._totales(fecha='2026-04-04')['total_vendido'], 1100)
+        self.assertEqual(self._totales(fecha='2026-04-05')['total_vendido'], 0)
+
+    def test_dia_que_salta_la_medianoche_por_horario_de_verano(self):
+        # 06-09-2026: las 00:00 (-04) pasan a ser 01:00 (-03); el día empieza a las 04:00 UTC.
+        self._libre(_utc(2026, 9, 6, 3, 59), 1)   # 23:59 del 05-09 (-04)
+        self._libre(_utc(2026, 9, 6, 4, 0), 10)   # 01:00 del 06-09 (-03)
+
+        self.assertEqual(self._totales(fecha='2026-09-06')['total_vendido'], 10)
+        self.assertEqual(self._buckets_con_ventas(self._resumen(nivel='dia', fecha='2026-09-06', zona='local')), {'1': 10})
+        self.assertEqual(self._totales(fecha='2026-09-05')['total_vendido'], 1)
